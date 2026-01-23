@@ -10,8 +10,12 @@
     --tile-height: 72px;  /* 高 */
     --gap: 8px; 
   }
-  body {
-    margin: 0; background:#0f172a; color:#e2e8f0; font-family: ui-sans-serif, system-ui;
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background:#0f172a; color:#e2e8f0; font-family: ui-sans-serif, system-ui;
     display:flex; flex-direction:column; align-items:center;
   }
   header { display:flex; gap:10px; align-items:center; margin-top:16px; }
@@ -26,6 +30,7 @@
     width:calc(var(--tile-width)*6 + var(--gap)*5 + 80px);
     height:calc(var(--tile-height)*6 + var(--gap)*5 + 80px);
     margin-left:auto; margin-right:auto; /* 左右置中 */
+    transform-origin: top left;
   }
   .tile {
     position:absolute; width:var(--tile-width); height:var(--tile-height);
@@ -77,10 +82,21 @@ function resizeCanvas(){
 }
 resizeCanvas();
 
+// 📱 自動縮放到全螢幕
+function resizeBoard() {
+  const scaleX = window.innerWidth / board.offsetWidth;
+  const scaleY = window.innerHeight / board.offsetHeight;
+  const scale = Math.min(scaleX, scaleY); // 保持比例
+  board.style.transform = `scale(${scale})`;
+  resizeCanvas();
+}
+window.addEventListener("resize", resizeBoard);
+resizeBoard();
+
 let tiles = [];
 let selected = [];
 
-// 改成使用外部圖片路徑
+// 使用外部圖片路徑
 const symbols = [
   "images/tile1.png","images/tile2.png","images/tile3.png","images/tile4.png",
   "images/tile5.png","images/tile6.png","images/tile7.png","images/tile8.png",
@@ -115,19 +131,59 @@ function initBoard() {
       const tile = document.createElement("div");
       tile.className="tile";
 
-      // 建立圖片元素
       const img = document.createElement("img");
       img.src = pool[r*boardSize+c];
       tile.appendChild(img);
 
-      tile.dataset.symbol = pool[r*boardSize+c]; // 用 dataset 存圖案路徑
+      tile.dataset.symbol = pool[r*boardSize+c];
 
       tile.style.left = `${c*(tileW+gap)+offsetX}px`;
       tile.style.top = `${r*(tileH+gap)+offsetY}px`;
       board.appendChild(tile);
       tiles[r][c]=tile;
+
+      // 支援觸摸與點擊
       tile.addEventListener("click",()=>selectTile(r,c));
+      tile.addEventListener("touchstart",(e)=>{
+        e.preventDefault();
+        const {x,y} = getScaledCoords(e);
+        handleTouch(x,y);
+      });
     }
+  }
+}
+
+// 👆 觸摸座標轉換
+function getScaledCoords(event) {
+  const rect = board.getBoundingClientRect();
+  const scaleX = board.offsetWidth / rect.width;
+  const scaleY = board.offsetHeight / rect.height;
+
+  const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+  const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+
+  const x = (clientX - rect.left) * scaleX;
+  const y = (clientY - rect.top) * scaleY;
+
+  return { x, y };
+}
+
+function handleTouch(x,y){
+  const style = getComputedStyle(board);
+  const tileW=parseInt(style.getPropertyValue('--tile-width'));
+  const tileH=parseInt(style.getPropertyValue('--tile-height'));
+  const gap=parseInt(style.getPropertyValue('--gap'));
+  const boardW = board.offsetWidth;
+  const boardH = board.offsetHeight;
+  const totalTilesW = boardSize * tileW + (boardSize-1)*gap;
+  const totalTilesH = boardSize * tileH + (boardSize-1)*gap;
+  const offsetX = (boardW - totalTilesW) / 2;
+  const offsetY = (boardH - totalTilesH) / 2;
+
+  const c = Math.floor((x - offsetX) / (tileW+gap));
+  const r = Math.floor((y - offsetY) / (tileH+gap));
+  if(r>=0 && r<boardSize && c>=0 && c<boardSize){
+    selectTile(r,c);
   }
 }
 
@@ -155,13 +211,14 @@ function tryMatch(){
       setTimeout(()=>{
         a.tile.classList.add("removing");
         b.tile.classList.add("removing");
-        setTimeout(()=>{
-          a.tile.remove(); b.tile.remove();
-          tiles[a.r][a.c]=null; tiles[b.r][b.c]=null;
-          clearSelection();
-          clearCanvas();
-          checkWin();
-        },250);
+        // 🔹 改用 animationend 事件來移除，避免 setTimeout 時間不一致
+        a.tile.addEventListener("animationend",()=>a.tile.remove());
+        b.tile.addEventListener("animationend",()=>b.tile.remove());
+        tiles[a.r][a.c]=null; 
+        tiles[b.r][b.c]=null;
+        clearSelection();
+        clearCanvas();
+        checkWin();
       },300);
       return;
     }
@@ -209,7 +266,7 @@ function findPath(r1, c1, r2, c2) {
       let nr = r + dr, nc = c + dc;
       let newTurns = (dir === null || (dir[0] === dr && dir[1] === dc)) ? turns : turns + 1;
       if (newTurns > 2) continue;
-            while (nr >= -1 && nr <= boardSize && nc >= -1 && nc <= boardSize) {
+      while (nr >= -1 && nr <= boardSize && nc >= -1 && nc <= boardSize) {
         if (!(nr === r2 && nc === c2)) {
           if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize) {
             if (!isEmptyCell(nr, nc)) break;
