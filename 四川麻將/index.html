@@ -6,15 +6,12 @@
 <title>四川麻將消消樂（6×6 單層）</title>
 <style>
   :root { 
-    --tile-width: 48px;   /* 直式比例：窄 */
-    --tile-height: 72px;  /* 高 */
+    --tile-width: 48px;
+    --tile-height: 72px;
     --gap: 8px; 
   }
   html, body {
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    overflow: hidden;
+    width: 100%; height: 100%; margin: 0; overflow: hidden;
     background:#0f172a; color:#e2e8f0; font-family: ui-sans-serif, system-ui;
     display:flex; flex-direction:column; align-items:center;
   }
@@ -26,10 +23,10 @@
   button:hover { background:#1f2937; }
   #board {
     position:relative; margin-top:16px; background:#111827; border:1px solid #374151; border-radius:12px;
-    padding:40px; /* 四邊一致留白 */
+    padding:40px;
     width:calc(var(--tile-width)*6 + var(--gap)*5 + 80px);
     height:calc(var(--tile-height)*6 + var(--gap)*5 + 80px);
-    margin-left:auto; margin-right:auto; /* 左右置中 */
+    margin-left:auto; margin-right:auto;
     transform-origin: top left;
   }
   .tile {
@@ -41,20 +38,35 @@
     transition:transform .12s ease, opacity .2s ease;
     overflow:hidden;
   }
-  .tile img {
-    width:100%; height:100%; object-fit:contain;
-  }
+  .tile img { width:100%; height:100%; object-fit:contain; }
   .tile.selected { outline:3px solid #22d3ee; transform:translateY(-2px) scale(1.03); }
   .tile.removing { animation:pop .22s ease forwards; }
   @keyframes pop { to { opacity:0; transform:scale(0.5); } }
-  canvas { 
-    position:absolute; 
-    top:0; left:0; 
-    pointer-events:none; 
-    z-index:10; 
+  canvas { position:absolute; top:0; left:0; pointer-events:none; z-index:10; }
+  #message { margin-top:12px; font-size:16px; font-weight:600; color:#22d3ee; }
+  #timer { margin-left:10px; font-size:16px; font-weight:600; color:#facc15; }
+  #winMessage {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(15,23,42,0.9);
+    color: #facc15;
+    font-size: 24px;
+    font-weight: bold;
+    padding: 20px 40px;
+    border-radius: 12px;
+    display: none;
+    z-index: 1000;
   }
-  #message {
-    margin-top:12px; font-size:16px; font-weight:600; color:#22d3ee;
+  .confetti {
+    position: fixed;
+    width: 10px; height: 10px;
+    background: red;
+    animation: fall linear forwards;
+    z-index: 999;
+  }
+  @keyframes fall {
+    to { transform: translateY(100vh) rotate(720deg); opacity: 0; }
   }
 </style>
 </head>
@@ -63,11 +75,13 @@
   <h1>四川麻將消消樂（6×6 單層）</h1>
   <button onclick="resetGame()">重新開始</button>
   <button onclick="hint()">提示</button>
+  <span id="timer">0 秒</span>
 </header>
 <div id="board">
   <canvas id="pathCanvas"></canvas>
 </div>
 <div id="message"></div>
+<div id="winMessage"></div>
 
 <script>
 const boardSize = 6;
@@ -76,17 +90,34 @@ const canvas = document.getElementById("pathCanvas");
 const ctx = canvas.getContext("2d");
 const message = document.getElementById("message");
 
+let timer = null;
+let elapsedTime = 0;
+
+function startTimer() {
+  elapsedTime = 0;
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    elapsedTime++;
+    document.getElementById("timer").innerText = elapsedTime + " 秒";
+  }, 1000);
+}
+function stopTimer() {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
 function resizeCanvas(){
   canvas.width = board.offsetWidth;
   canvas.height = board.offsetHeight;
 }
 resizeCanvas();
 
-// 📱 自動縮放到全螢幕
 function resizeBoard() {
   const scaleX = window.innerWidth / board.offsetWidth;
   const scaleY = window.innerHeight / board.offsetHeight;
-  const scale = Math.min(scaleX, scaleY); // 保持比例
+  const scale = Math.min(scaleX, scaleY);
   board.style.transform = `scale(${scale})`;
   resizeCanvas();
 }
@@ -96,7 +127,6 @@ resizeBoard();
 let tiles = [];
 let selected = [];
 
-// 使用外部圖片路徑
 const symbols = [
   "images/tile1.png","images/tile2.png","images/tile3.png","images/tile4.png",
   "images/tile5.png","images/tile6.png","images/tile7.png","images/tile8.png",
@@ -130,19 +160,14 @@ function initBoard() {
     for (let c=0;c<boardSize;c++) {
       const tile = document.createElement("div");
       tile.className="tile";
-
       const img = document.createElement("img");
       img.src = pool[r*boardSize+c];
       tile.appendChild(img);
-
       tile.dataset.symbol = pool[r*boardSize+c];
-
       tile.style.left = `${c*(tileW+gap)+offsetX}px`;
       tile.style.top = `${r*(tileH+gap)+offsetY}px`;
       board.appendChild(tile);
       tiles[r][c]=tile;
-
-      // 支援觸摸與點擊
       tile.addEventListener("click",()=>selectTile(r,c));
       tile.addEventListener("touchstart",(e)=>{
         e.preventDefault();
@@ -151,20 +176,17 @@ function initBoard() {
       });
     }
   }
+  startTimer(); // 新局開始計時
 }
 
-// 👆 觸摸座標轉換
 function getScaledCoords(event) {
   const rect = board.getBoundingClientRect();
   const scaleX = board.offsetWidth / rect.width;
   const scaleY = board.offsetHeight / rect.height;
-
   const clientX = event.touches ? event.touches[0].clientX : event.clientX;
   const clientY = event.touches ? event.touches[0].clientY : event.clientY;
-
   const x = (clientX - rect.left) * scaleX;
   const y = (clientY - rect.top) * scaleY;
-
   return { x, y };
 }
 
@@ -179,7 +201,6 @@ function handleTouch(x,y){
   const totalTilesH = boardSize * tileH + (boardSize-1)*gap;
   const offsetX = (boardW - totalTilesW) / 2;
   const offsetY = (boardH - totalTilesH) / 2;
-
   const c = Math.floor((x - offsetX) / (tileW+gap));
   const r = Math.floor((y - offsetY) / (tileH+gap));
   if(r>=0 && r<boardSize && c>=0 && c<boardSize){
@@ -211,7 +232,6 @@ function tryMatch(){
       setTimeout(()=>{
         a.tile.classList.add("removing");
         b.tile.classList.add("removing");
-        // 🔹 改用 animationend 事件來移除，避免 setTimeout 時間不一致
         a.tile.addEventListener("animationend",()=>a.tile.remove());
         b.tile.addEventListener("animationend",()=>b.tile.remove());
         tiles[a.r][a.c]=null; 
@@ -219,6 +239,13 @@ function tryMatch(){
         clearSelection();
         clearCanvas();
         checkWin();
+        // 🔹 消除後檢查是否有解，若無解則只洗剩下的牌
+        setTimeout(()=>{
+          if(!hasSolution()){
+            message.textContent = "⚡ 無解，自動洗牌！";
+            shuffleRemainingTiles();
+          }
+        },400);
       },300);
       return;
     }
@@ -290,7 +317,6 @@ function findPath(r1, c1, r2, c2) {
   return null;
 }
 
-// 置中計算：使用 offsetX / offsetY
 function center(r,c){
   const style = getComputedStyle(board);
   const tileW=parseInt(style.getPropertyValue('--tile-width'));
@@ -309,7 +335,15 @@ function center(r,c){
 
 function checkWin(){
   if(tiles.flat().every(t => t===null)){
-    message.textContent = "🎉 恭喜完成！";
+    stopTimer(); // 🔹 過關停止計時
+    const winMessage = document.getElementById("winMessage");
+    winMessage.textContent = "🎉 恭喜過關，耗時 " + elapsedTime + " 秒";
+    winMessage.style.display = "block";
+    launchConfetti();
+    setTimeout(()=>{
+      winMessage.style.display = "none";
+    },3000);
+    // 🔹 不再自動重置，等待使用者按下「重新開始」
   }
 }
 
@@ -339,10 +373,74 @@ function hint(){
   }
 }
 
+function hasSolution(){
+  for(let r1=0;r1<boardSize;r1++){
+    for(let c1=0;c1<boardSize;c1++){
+      let t1=tiles[r1][c1];
+      if(!t1) continue;
+      for(let r2=r1;r2<boardSize;r2++){
+        for(let c2=0;c2<boardSize;c2++){
+          let t2=tiles[r2][c2];
+          if(!t2 || (r1===r2 && c1===c2)) continue;
+          if(t1.dataset.symbol===t2.dataset.symbol){
+            if(findPath(r1,c1,r2,c2)) return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// 🔹 只洗剩下的牌
+function shuffleRemainingTiles(){
+  let remaining = [];
+  for(let r=0;r<boardSize;r++){
+    for(let c=0;c<boardSize;c++){
+      if(tiles[r][c]){
+        remaining.push(tiles[r][c].dataset.symbol);
+      }
+    }
+  }
+  remaining.sort(()=>Math.random()-0.5);
+  let index=0;
+  for(let r=0;r<boardSize;r++){
+    for(let c=0;c<boardSize;c++){
+      if(tiles[r][c]){
+        tiles[r][c].dataset.symbol = remaining[index];
+        tiles[r][c].querySelector("img").src = remaining[index];
+        index++;
+      }
+    }
+  }
+}
+
 function resetGame(){
+  stopTimer(); // 🔹 停止計時
   clearCanvas();
   clearSelection();
-  initBoard();
+  initBoard(); // 🔹 重新開始並重新計時
+}
+
+function launchConfetti(){
+  for(let i=0;i<80;i++){
+    const confetti = document.createElement("div");
+    confetti.className = "confetti";
+    confetti.style.left = Math.random()*window.innerWidth + "px";
+    confetti.style.background = randomColor();
+    confetti.style.width = 8 + Math.random()*8 + "px";
+    confetti.style.height = 8 + Math.random()*8 + "px";
+    confetti.style.opacity = 0.8;
+    confetti.style.transform = `rotate(${Math.random()*360}deg)`;
+    confetti.style.animationDuration = (2 + Math.random()*2) + "s"; // 隨機速度
+    document.body.appendChild(confetti);
+    setTimeout(()=>confetti.remove(),4000);
+  }
+}
+
+function randomColor(){
+  const colors = ["#f87171","#facc15","#34d399","#60a5fa","#a78bfa","#f472b6"];
+  return colors[Math.floor(Math.random()*colors.length)];
 }
 
 initBoard();
