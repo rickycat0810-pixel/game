@@ -31,9 +31,13 @@
     position:absolute; width:var(--tile-width); height:var(--tile-height);
     background:#f8fafc; border:2px solid #cbd5e1; border-radius:6px;
     display:flex; align-items:center; justify-content:center;
-    font-size:24px; font-weight:700; color:#0f172a; cursor:pointer;
+    cursor:pointer;
     box-shadow:0 6px 12px rgba(0,0,0,.35);
     transition:transform .12s ease, opacity .2s ease;
+    overflow:hidden;
+  }
+  .tile img {
+    width:100%; height:100%; object-fit:contain;
   }
   .tile.selected { outline:3px solid #22d3ee; transform:translateY(-2px) scale(1.03); }
   .tile.removing { animation:pop .22s ease forwards; }
@@ -76,11 +80,17 @@ resizeCanvas();
 let tiles = [];
 let selected = [];
 
+// 改成使用外部圖片路徑
+const symbols = [
+  "images/tile1.png","images/tile2.png","images/tile3.png","images/tile4.png",
+  "images/tile5.png","images/tile6.png","images/tile7.png","images/tile8.png",
+  "images/tile9.png","images/tile10.png","images/tile11.png","images/tile12.png"
+];
+
 function initBoard() {
   board.querySelectorAll(".tile").forEach(t => t.remove());
   tiles = [];
   message.textContent = "";
-  const symbols = ["🀄","🀅","🀆","🀇","🀈","🀉","🀊","🀋","🀌","🀍","🀎","🀏"];
   let pool = [];
   for (let i=0;i<boardSize*boardSize/2;i++) {
     let s = symbols[i % symbols.length];
@@ -89,12 +99,9 @@ function initBoard() {
   pool.sort(()=>Math.random()-0.5);
 
   const style = getComputedStyle(board);
-  const padX = parseInt(style.paddingLeft);
-  const padY = parseInt(style.paddingTop);
   const tileW=parseInt(style.getPropertyValue('--tile-width'));
   const tileH=parseInt(style.getPropertyValue('--tile-height'));
   const gap=parseInt(style.getPropertyValue('--gap'));
-
   const boardW = board.offsetWidth;
   const boardH = board.offsetHeight;
   const totalTilesW = boardSize * tileW + (boardSize-1)*gap;
@@ -107,7 +114,14 @@ function initBoard() {
     for (let c=0;c<boardSize;c++) {
       const tile = document.createElement("div");
       tile.className="tile";
-      tile.textContent=pool[r*boardSize+c];
+
+      // 建立圖片元素
+      const img = document.createElement("img");
+      img.src = pool[r*boardSize+c];
+      tile.appendChild(img);
+
+      tile.dataset.symbol = pool[r*boardSize+c]; // 用 dataset 存圖案路徑
+
       tile.style.left = `${c*(tileW+gap)+offsetX}px`;
       tile.style.top = `${r*(tileH+gap)+offsetY}px`;
       board.appendChild(tile);
@@ -134,16 +148,20 @@ function selectTile(r,c){
 
 function tryMatch(){
   const [a,b]=selected;
-  if(a.tile.textContent===b.tile.textContent){
+  if(a.tile.dataset.symbol===b.tile.dataset.symbol){
     const path=findPath(a.r,a.c,b.r,b.c);
     if(path){
       drawPath(path);
       setTimeout(()=>{
-        a.tile.remove(); b.tile.remove();
-        tiles[a.r][a.c]=null; tiles[b.r][b.c]=null;
-        clearSelection();
-        clearCanvas();
-        checkWin();
+        a.tile.classList.add("removing");
+        b.tile.classList.add("removing");
+        setTimeout(()=>{
+          a.tile.remove(); b.tile.remove();
+          tiles[a.r][a.c]=null; tiles[b.r][b.c]=null;
+          clearSelection();
+          clearCanvas();
+          checkWin();
+        },250);
       },300);
       return;
     }
@@ -191,7 +209,7 @@ function findPath(r1, c1, r2, c2) {
       let nr = r + dr, nc = c + dc;
       let newTurns = (dir === null || (dir[0] === dr && dir[1] === dc)) ? turns : turns + 1;
       if (newTurns > 2) continue;
-      while (nr >= -1 && nr <= boardSize && nc >= -1 && nc <= boardSize) {
+            while (nr >= -1 && nr <= boardSize && nc >= -1 && nc <= boardSize) {
         if (!(nr === r2 && nc === c2)) {
           if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize) {
             if (!isEmptyCell(nr, nc)) break;
@@ -208,7 +226,7 @@ function findPath(r1, c1, r2, c2) {
           });
         }
         if (nr === r2 && nc === c2) break;
-                nr += dr; nc += dc;
+        nr += dr; nc += dc;
       }
     }
   }
@@ -249,7 +267,7 @@ function hint(){
         for(let c2=0;c2<boardSize;c2++){
           let t2=tiles[r2][c2];
           if(!t2 || (r1===r2 && c1===c2)) continue;
-          if(t1.textContent===t2.textContent){
+          if(t1.dataset.symbol===t2.dataset.symbol){
             let path=findPath(r1,c1,r2,c2);
             if(path){
               t1.classList.add("selected");
