@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>四川麻將消消樂（6×6 單層直式牌）</title>
+<style>
+  :root { 
+    --tile-width: 48px;   /* 直式比例：窄 */
+    --tile-height: 72px;  /* 高 */
+    --gap: 8px; 
+  }
+  body {
+    margin: 0; background:#0f172a; color:#e2e8f0; font-family: ui-sans-serif, system-ui;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  header { display:flex; gap:10px; align-items:center; margin-top:16px; }
+  h1 { font-size:18px; margin:0; font-weight:600; }
+  button {
+    background:#334155; color:#e2e8f0; border:1px solid #475569; border-radius:8px; padding:8px 12px; cursor:pointer;
+  }
+  button:hover { background:#1f2937; }
+  #board {
+    position:relative; margin-top:16px; background:#111827; border:1px solid #374151; border-radius:12px;
+    padding:40px; /* 四邊一致留白 */
+    width:calc(var(--tile-width)*6 + var(--gap)*5 + 80px);
+    height:calc(var(--tile-height)*6 + var(--gap)*5 + 80px);
+    margin-left:auto; margin-right:auto; /* 左右置中 */
+  }
+  .tile {
+    position:absolute; width:var(--tile-width); height:var(--tile-height);
+    background:#f8fafc; border:2px solid #cbd5e1; border-radius:6px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:24px; font-weight:700; color:#0f172a; cursor:pointer;
+    box-shadow:0 6px 12px rgba(0,0,0,.35);
+    transition:transform .12s ease, opacity .2s ease;
+  }
+  .tile.selected { outline:3px solid #22d3ee; transform:translateY(-2px) scale(1.03); }
+  .tile.removing { animation:pop .22s ease forwards; }
+  @keyframes pop { to { opacity:0; transform:scale(0.5); } }
+  canvas { 
+    position:absolute; 
+    top:0; left:0; 
+    pointer-events:none; 
+    z-index:10; 
+  }
+  #message {
+    margin-top:12px; font-size:16px; font-weight:600; color:#22d3ee;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>四川麻將消消樂（6×6 單層直式牌）</h1>
+  <button onclick="resetGame()">重新開始</button>
+  <button onclick="hint()">提示</button>
+</header>
+<div id="board">
+  <canvas id="pathCanvas"></canvas>
+</div>
+<div id="message"></div>
+
+<script>
+const boardSize = 6;
+const board = document.getElementById("board");
+const canvas = document.getElementById("pathCanvas");
+const ctx = canvas.getContext("2d");
+const message = document.getElementById("message");
+
+function resizeCanvas(){
+  canvas.width = board.offsetWidth;
+  canvas.height = board.offsetHeight;
+}
+resizeCanvas();
+
+let tiles = [];
+let selected = [];
+
+function initBoard() {
+  board.querySelectorAll(".tile").forEach(t => t.remove());
+  tiles = [];
+  message.textContent = "";
+  const symbols = ["🀄","🀅","🀆","🀇","🀈","🀉","🀊","🀋","🀌","🀍","🀎","🀏"];
+  let pool = [];
+  for (let i=0;i<boardSize*boardSize/2;i++) {
+    let s = symbols[i % symbols.length];
+    pool.push(s,s);
+  }
+  pool.sort(()=>Math.random()-0.5);
+
+  const style = getComputedStyle(board);
+  const padX = parseInt(style.paddingLeft);
+  const padY = parseInt(style.paddingTop);
+  const tileW=parseInt(style.getPropertyValue('--tile-width'));
+  const tileH=parseInt(style.getPropertyValue('--tile-height'));
+  const gap=parseInt(style.getPropertyValue('--gap'));
+
+  const boardW = board.offsetWidth;
+  const boardH = board.offsetHeight;
+  const totalTilesW = boardSize * tileW + (boardSize-1)*gap;
+  const totalTilesH = boardSize * tileH + (boardSize-1)*gap;
+  const offsetX = (boardW - totalTilesW) / 2;
+  const offsetY = (boardH - totalTilesH) / 2;
+
+  for (let r=0;r<boardSize;r++) {
+    tiles[r] = [];
+    for (let c=0;c<boardSize;c++) {
+      const tile = document.createElement("div");
+      tile.className="tile";
+      tile.textContent=pool[r*boardSize+c];
+      tile.style.left = `${c*(tileW+gap)+offsetX}px`;
+      tile.style.top = `${r*(tileH+gap)+offsetY}px`;
+      board.appendChild(tile);
+      tiles[r][c]=tile;
+      tile.addEventListener("click",()=>selectTile(r,c));
+    }
+  }
+}
+
+function selectTile(r,c){
+  const tile = tiles[r][c];
+  if(!tile) return;
+  if(selected.length===0){
+    tile.classList.add("selected");
+    selected.push({r,c,tile});
+  } else if(selected.length===1){
+    const first=selected[0];
+    if(first.tile===tile){ return; }
+    tile.classList.add("selected");
+    selected.push({r,c,tile});
+    tryMatch();
+  }
+}
+
+function tryMatch(){
+  const [a,b]=selected;
+  if(a.tile.textContent===b.tile.textContent){
+    const path=findPath(a.r,a.c,b.r,b.c);
+    if(path){
+      drawPath(path);
+      setTimeout(()=>{
+        a.tile.remove(); b.tile.remove();
+        tiles[a.r][a.c]=null; tiles[b.r][b.c]=null;
+        clearSelection();
+        clearCanvas();
+        checkWin();
+      },300);
+      return;
+    }
+  }
+  setTimeout(clearSelection,300);
+}
+
+function clearSelection(){
+  selected.forEach(s=>s.tile.classList.remove("selected"));
+  selected=[];
+}
+
+function clearCanvas(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+}
+
+function drawPath(path){
+  clearCanvas();
+  ctx.beginPath();
+  ctx.moveTo(path[0].x,path[0].y);
+  for(let i=1;i<path.length;i++){
+    ctx.lineTo(path[i].x,path[i].y);
+  }
+  ctx.strokeStyle="#22d3ee";
+  ctx.lineWidth=3;
+  ctx.stroke();
+}
+
+function isEmptyCell(r, c) {
+  if (r < 0 || r >= boardSize || c < 0 || c >= boardSize) return true;
+  return tiles[r][c] === null;
+}
+
+function findPath(r1, c1, r2, c2) {
+  const dirs = [[1,0],[0,1],[-1,0],[0,-1]];
+  const queue = [{ r: r1, c: c1, path: [center(r1, c1)], turns: 0, dir: null }];
+  const visited = new Set();
+
+  while (queue.length) {
+    const { r, c, path, turns, dir } = queue.shift();
+    if (r === r2 && c === c2) {
+      return [...path, center(r2, c2)];
+    }
+    for (const [dr, dc] of dirs) {
+      let nr = r + dr, nc = c + dc;
+      let newTurns = (dir === null || (dir[0] === dr && dir[1] === dc)) ? turns : turns + 1;
+      if (newTurns > 2) continue;
+      while (nr >= -1 && nr <= boardSize && nc >= -1 && nc <= boardSize) {
+        if (!(nr === r2 && nc === c2)) {
+          if (nr >= 0 && nr < boardSize && nc >= 0 && nc < boardSize) {
+            if (!isEmptyCell(nr, nc)) break;
+          }
+        }
+        const key = `${nr},${nc},${dr},${dc},${newTurns}`;
+        if (!visited.has(key)) {
+          visited.add(key);
+          queue.push({
+            r: nr, c: nc,
+            path: [...path, center(nr, nc)],
+            turns: newTurns,
+            dir: [dr, dc]
+          });
+        }
+        if (nr === r2 && nc === c2) break;
+                nr += dr; nc += dc;
+      }
+    }
+  }
+  return null;
+}
+
+// 置中計算：使用 offsetX / offsetY
+function center(r,c){
+  const style = getComputedStyle(board);
+  const tileW=parseInt(style.getPropertyValue('--tile-width'));
+  const tileH=parseInt(style.getPropertyValue('--tile-height'));
+  const gap=parseInt(style.getPropertyValue('--gap'));
+  const boardW = board.offsetWidth;
+  const boardH = board.offsetHeight;
+  const totalTilesW = boardSize * tileW + (boardSize-1)*gap;
+  const totalTilesH = boardSize * tileH + (boardSize-1)*gap;
+  const offsetX = (boardW - totalTilesW) / 2;
+  const offsetY = (boardH - totalTilesH) / 2;
+  const x=c*(tileW+gap)+offsetX+tileW/2;
+  const y=r*(tileH+gap)+offsetY+tileH/2;
+  return {x,y};
+}
+
+function checkWin(){
+  if(tiles.flat().every(t => t===null)){
+    message.textContent = "🎉 恭喜完成！";
+  }
+}
+
+function hint(){
+  clearSelection();
+  clearCanvas();
+  for(let r1=0;r1<boardSize;r1++){
+    for(let c1=0;c1<boardSize;c1++){
+      let t1=tiles[r1][c1];
+      if(!t1) continue;
+      for(let r2=r1;r2<boardSize;r2++){
+        for(let c2=0;c2<boardSize;c2++){
+          let t2=tiles[r2][c2];
+          if(!t2 || (r1===r2 && c1===c2)) continue;
+          if(t1.textContent===t2.textContent){
+            let path=findPath(r1,c1,r2,c2);
+            if(path){
+              t1.classList.add("selected");
+              t2.classList.add("selected");
+              drawPath(path);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function resetGame(){
+  clearCanvas();
+  clearSelection();
+  initBoard();
+}
+
+initBoard();
+</script>
+</body>
+</html>
