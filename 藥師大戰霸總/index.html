@@ -5,8 +5,8 @@
   <title>透視射擊遊戲</title>
   <style>
     canvas { background: black; display: block; margin: auto; }
-    #restartBtn {
-      display: none;
+    #restartBtn, #toggleGridBtn {
+      display: block;
       margin: 20px auto;
       padding: 10px 20px;
       font-size: 18px;
@@ -15,15 +15,18 @@
       border: none;
       cursor: pointer;
     }
+    #restartBtn { display: none; }
   </style>
 </head>
 <body>
 <canvas id="gameCanvas" width="800" height="600"></canvas>
 <button id="restartBtn">重新開始</button>
+<button id="toggleGridBtn">顯示格線</button>
 <script>
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 const restartBtn = document.getElementById("restartBtn");
+const toggleGridBtn = document.getElementById("toggleGridBtn");
 
 // 載入圖片
 const playerImg = new Image();
@@ -46,31 +49,49 @@ const shotCooldown = 500;
 const dodgeCooldown = 200;
 const maxHP = 5;
 
-// 抽象化透視公式
+// 控制格線顯示
+let showGrid = false;
+toggleGridBtn.addEventListener("click", () => {
+  showGrid = !showGrid;
+  toggleGridBtn.textContent = showGrid ? "隱藏格線" : "顯示格線";
+});
+
 function getPerspectiveX(y, baseX){
   return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y));
 }
 
-function initGame(){
-  vanishPoint = { x: canvas.width/2, y: (canvas.height * (4/9))-10 }; 
-  bottomBoundaryY = canvas.height * (2/3);
+function getEnemyScale(y) {
+  let eLeftX = getPerspectiveX(y, 0);
+  let eRightX = getPerspectiveX(y, canvas.width);
+  let enemyWidth = eRightX - eLeftX;
 
-  // 玩家位置：貼齊底端透視邊界
-  player = { x: canvas.width/2, y: bottomBoundaryY };
-
-  // 計算敵人縮放比例
   let pLeftX = getPerspectiveX(player.y, 0);
   let pRightX = getPerspectiveX(player.y, canvas.width);
   let playerWidth = pRightX - pLeftX;
 
-  let eLeftX = getPerspectiveX(vanishPoint.y, 0);
-  let eRightX = getPerspectiveX(vanishPoint.y, canvas.width);
-  let enemyWidth = eRightX - eLeftX;
+  return { scale: (enemyWidth / playerWidth) * 2.0, width: enemyWidth };
+}
 
-  let enemyScale = (enemyWidth / playerWidth)*1.2;
+function getBulletScale(y) {
+  let bLeftX = getPerspectiveX(y, 0);
+  let bRightX = getPerspectiveX(y, canvas.width);
+  let bulletWidth = bRightX - bLeftX;
 
-  // 固定 y 在消失點 +40
-  enemy = { x: vanishPoint.x, y: vanishPoint.y + 30, dir: 1, scale: enemyScale };
+  let pLeftX = getPerspectiveX(player.y, 0);
+  let pRightX = getPerspectiveX(player.y, canvas.width);
+  let playerWidth = pRightX - pLeftX;
+
+  return bulletWidth / playerWidth;
+}
+
+function initGame(){
+  vanishPoint = { x: canvas.width/2, y: canvas.height*(2/3)-15 }; 
+  bottomBoundaryY = canvas.height;
+
+  player = { x: canvas.width/2, y: bottomBoundaryY };
+
+  let initScale = getEnemyScale(vanishPoint.y + 30);
+  enemy = { x: vanishPoint.x, y: vanishPoint.y + 30, dir: 1, scale: initScale.scale };
 
   bullets = [];
   enemyBullets = [];
@@ -88,13 +109,11 @@ initGame();
 const playerMaxSpeed = canvas.width/5 / 60;
 let targetX = player.x;
 
-// 玩家移動
 canvas.addEventListener("mousemove", e => {
   const rect = canvas.getBoundingClientRect();
   targetX = e.clientX - rect.left;
 });
 
-// 玩家射擊
 canvas.addEventListener("click", () => {
   if(gameOver) return;
   let now = Date.now();
@@ -103,7 +122,6 @@ canvas.addEventListener("click", () => {
   bullets.push({ startX: player.x, startY: player.y, x: player.x, y: player.y, progress: 0 });
 });
 
-// 敵人射擊邏輯
 setInterval(() => {
   if(gameOver) return;
   let now = Date.now();
@@ -124,21 +142,20 @@ setInterval(() => {
   }
 }, 50);
 
-// 更新邏輯
 function update() {
   if(gameOver) return;
+
+  let pLeftX = getPerspectiveX(player.y, 0);
+  let pRightX = getPerspectiveX(player.y, canvas.width);
+  let playerWidth = pRightX - pLeftX;
 
   let dx = targetX - player.x;
   if(Math.abs(dx) > playerMaxSpeed) dx = playerMaxSpeed * Math.sign(dx);
   player.x += dx;
 
-  // 玩家邊界限制
-  let pLeftX = getPerspectiveX(player.y, 0);
-  let pRightX = getPerspectiveX(player.y, canvas.width);
   if(player.x - basePlayerW/2 < pLeftX) player.x = pLeftX + basePlayerW/2;
   if(player.x + basePlayerW/2 > pRightX) player.x = pRightX - basePlayerW/2;
 
-  // 子彈更新
   bullets.forEach(b => {
     b.progress += 0.02;
     b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x;
@@ -156,63 +173,96 @@ function update() {
   });
   enemyBullets = enemyBullets.filter(b => b.progress < 1);
 
-  // 敵人移動（修正邊界判斷）
-  let leftX = getPerspectiveX(enemy.y, 0);
-  let rightX = getPerspectiveX(enemy.y, canvas.width);
-  let enemyWidth = rightX - leftX;
+  let enemyCalc = getEnemyScale(enemy.y);
+  enemy.scale = enemyCalc.scale;
+  let enemyWidth = enemyCalc.width;
 
-  let pLeftX2 = getPerspectiveX(player.y, 0);
-  let pRightX2 = getPerspectiveX(player.y, canvas.width);
-  let playerWidth = pRightX2 - pLeftX2;
-
-  let enemyScale = enemyWidth / playerWidth;
-  let enemyW = basePlayerW * enemyScale;
+  let enemyW = basePlayerW * enemy.scale;
   let enemySpeed = playerMaxSpeed * (enemyWidth / playerWidth);
 
   enemy.x += enemy.dir * enemySpeed;
-  if(enemy.x - enemyW/2 <= leftX){ enemy.x = leftX + enemyW/2; enemy.dir = 1; }
-  if(enemy.x + enemyW/2 >= rightX){ enemy.x = rightX - enemyW/2; enemy.dir = -1; }
+  if(enemy.x - enemyW/2 <= getPerspectiveX(enemy.y, 0)){ 
+    enemy.x = getPerspectiveX(enemy.y, 0) + enemyW/2; 
+    enemy.dir = 1; 
+  }
+  if(enemy.x + enemyW/2 >= getPerspectiveX(enemy.y, canvas.width)){ 
+    enemy.x = getPerspectiveX(enemy.y, canvas.width) - enemyW/2; 
+    enemy.dir = -1; 
+  }
 
-  // 判斷擊中
+  // 玩家子彈擊中敵人判定
   bullets.forEach(b => {
     let dx = b.x - enemy.x;
     let dy = b.y - enemy.y;
     let dist = Math.sqrt(dx*dx + dy*dy);
-    let hitbox = 20 * enemyScale;
+    let hitbox = enemyW / 2;
     if(dist < hitbox){
-      enemyHP--; b.progress = 1;
+      enemyHP--; 
+      b.progress = 1;
     }
   });
+
+  // 敵人子彈擊中玩家判定
   enemyBullets.forEach(b => {
     let dx = b.x - player.x;
     let dy = b.y - player.y;
     let dist = Math.sqrt(dx*dx + dy*dy);
-    if(dist < 20){
-      playerHP--; b.progress = 1;
+    let hitbox = basePlayerW / 2;
+    if(dist < hitbox){
+      playerHP--; 
+      b.progress = 1;
     }
   });
 
-  if(playerHP <= 0 || enemyHP <= 0){ gameOver = true; restartBtn.style.display = "block"; }
+  if(playerHP <= 0 || enemyHP <= 0){ 
+    gameOver = true; 
+    restartBtn.style.display = "block"; 
+  }
 }
 
-// 繪製血條
-function drawHP(x, y, hp, maxHP, color){
+// 血條顯示
+function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+
+  // 玩家固定高度 10px，敵人依比例縮小
+  let barHeight = isEnemy ? Math.max(6, 10 * (charHeight/basePlayerH)) : 10;
+
+  // 背景灰色血槽
   ctx.fillStyle = "gray";
-  ctx.fillRect(x, y, 100, 10);
+  ctx.fillRect(x - charWidth/2, y - 20, charWidth, barHeight);
+
+  // 顏色邏輯
+  let color = "green";
+  if(hp <= 3) color = "yellow";
+  if(hp <= 2) color = "red";
+  if(hp === 1 && Math.floor(Date.now()/300) % 2 === 0) color = "rgba(255,0,0,0)";
+
   ctx.fillStyle = color;
-  ctx.fillRect(x, y, 100 * (hp/maxHP), 10);
+  ctx.fillRect(x - charWidth/2, y - 20, charWidth * (hp/maxHP), barHeight);
+
+  ctx.restore();
 }
+
+// 預先計算格線座標
+const gridLines = [];
+function initGrid(){
+  for(let i=0;i<30;i++){
+    let x = (canvas.width/30)*i;
+    gridLines.push({x});
+  }
+}
+initGrid();
 
 // 繪製格線
 function drawGrid() {
   ctx.strokeStyle = "gray";
-  for(let i=0;i<30;i++){
-    let x = (canvas.width/30)*i;
+  gridLines.forEach(line => {
     ctx.beginPath();
-    ctx.moveTo(x, bottomBoundaryY);
+    ctx.moveTo(line.x, bottomBoundaryY);
     ctx.lineTo(vanishPoint.x, vanishPoint.y);
     ctx.stroke();
-  }
+  });
   ctx.beginPath();
   ctx.moveTo(0, bottomBoundaryY);
   ctx.lineTo(canvas.width, bottomBoundaryY);
@@ -223,14 +273,15 @@ function drawGrid() {
 function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // 背景圖片
+  // 背景
+  ctx.fillStyle = "skyblue";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-  drawGrid();
-
-  // 血條位置：玩家左下角，敵人右上角
-  drawHP(20, bottomBoundaryY+20, playerHP, maxHP, "cyan");
-  drawHP(canvas.width-120, 20, enemyHP, maxHP, "red");
+  // 顯示格線判斷
+  if(showGrid){
+    drawGrid();
+  }
 
   if(gameOver){
     ctx.fillStyle = "yellow";
@@ -241,40 +292,27 @@ function draw() {
 
   // 玩家角色
   ctx.drawImage(playerImg, player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
+  drawHPAbove(player.x, player.y - basePlayerH, playerHP, maxHP, basePlayerW, basePlayerH, false);
 
-  // 敵人角色 (透視縮放)
-  let leftX = getPerspectiveX(enemy.y, 0);
-  let rightX = getPerspectiveX(enemy.y, canvas.width);
-  let enemyWidth = rightX - leftX;
-
-  let pLeftX = getPerspectiveX(player.y, 0);
-  let pRightX = getPerspectiveX(player.y, canvas.width);
-  let playerWidth = pRightX - pLeftX;
-  let enemyScale = (enemyWidth / playerWidth)*1.2;
-
-  let enemyW = basePlayerW * enemyScale;
-  let enemyH = basePlayerH * enemyScale;
+  // 敵人角色
+  let enemyW = basePlayerW * enemy.scale;
+  let enemyH = basePlayerH * enemy.scale;
   ctx.drawImage(enemyImg, enemy.x - enemyW/2, enemy.y - enemyH, enemyW, enemyH);
+  drawHPAbove(enemy.x, enemy.y - enemyH, enemyHP, maxHP, enemyW, enemyH, true);
 
-  // 玩家子彈 (透視縮小)
+  // 玩家子彈
   ctx.fillStyle = "yellow";
   bullets.forEach(b => {
-    let pLeftX = getPerspectiveX(b.y, 0);
-    let pRightX = getPerspectiveX(b.y, canvas.width);
-    let bulletWidth = pRightX - pLeftX;
-    let scale = bulletWidth / playerWidth;
+    let scale = getBulletScale(b.y);
     ctx.beginPath();
     ctx.arc(b.x, b.y, 8*scale, 0, Math.PI*2);
     ctx.fill();
   });
 
-  // 敵人子彈 (透視放大)
+  // 敵人子彈
   ctx.fillStyle = "orange";
   enemyBullets.forEach(b => {
-    let eLeftX = getPerspectiveX(b.y, 0);
-    let eRightX = getPerspectiveX(b.y, canvas.width);
-    let bulletWidth = eRightX - eLeftX;
-    let scale = bulletWidth / playerWidth;
+    let scale = getBulletScale(b.y);
     ctx.beginPath();
     ctx.arc(b.x, b.y, 8*scale, 0, Math.PI*2);
     ctx.fill();
@@ -292,6 +330,14 @@ gameLoop();
 restartBtn.addEventListener("click", () => {
   initGame();
 });
+
+// 遊戲主迴圈
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
 </script>
 </body>
 </html>
