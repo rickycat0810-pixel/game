@@ -51,9 +51,9 @@ const bgImg = new Image();
 bgImg.src = "背景.png";
 
 // 可調整倍率
-const scaleFactor = 4.0;
-const basePlayerW = 35 * scaleFactor;
-const basePlayerH = 50 * scaleFactor;
+const scaleFactor = 1.0;
+const basePlayerH = (canvas.height) * scaleFactor;
+const basePlayerW = basePlayerH*(35/50);
 
 let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP, enemyHP, gameOver;
 let lastPlayerShot = 0;
