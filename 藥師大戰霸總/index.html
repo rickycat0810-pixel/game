@@ -38,7 +38,7 @@ const bgImg = new Image();
 bgImg.src = "背景.png";
 
 // 可調整倍率
-const scaleFactor = 2.0;
+const scaleFactor = 4.0;
 const basePlayerW = 35 * scaleFactor;
 const basePlayerH = 50 * scaleFactor;
 
@@ -95,13 +95,15 @@ function getBulletScale(y) {
 }
 
 function initGame(){
-  vanishPoint = { x: canvas.width/2, y: canvas.height*(2/3)-15 }; 
+  vanishPoint = { x: canvas.width/2, y: canvas.height*(31/48) }; 
   bottomBoundaryY = canvas.height;
-
+    
   player = { x: canvas.width/2, y: bottomBoundaryY };
-
-  let initScale = getEnemyScale(vanishPoint.y + 30);
-  enemy = { x: vanishPoint.x, y: vanishPoint.y + 30, dir: 1, scale: initScale.scale };
+  
+  let enemyY = vanishPoint.y + (1/8) * (bottomBoundaryY - vanishPoint.y);
+  
+  let initScale = getEnemyScale(enemyY);
+  enemy = { x: vanishPoint.x, y: enemyY, dir: 1, scale: initScale.scale };
 
   bullets = [];
   enemyBullets = [];
@@ -136,7 +138,7 @@ function shootBullet() {
   let now = Date.now();
   if(now - lastPlayerShot < shotCooldown) return;
   lastPlayerShot = now;
-  bullets.push({ startX: player.x, startY: player.y, x: player.x, y: player.y, progress: 0 });
+  bullets.push({ startX: player.x, startY: player.y-basePlayerH/2, x: player.x, y: player.y-basePlayerH/2, progress: 0 });
 }
 
 setInterval(() => {
@@ -155,6 +157,10 @@ setInterval(() => {
   let targetX = vanishPoint.x + slope * (bottomBoundaryY - vanishPoint.y);
   if(Math.abs(targetX - player.x) < 30){
     lastEnemyShot = now;
+	
+	let enemyW = basePlayerW * enemy.scale;
+	let enemyH = basePlayerH * enemy.scale;
+	
     enemyBullets.push({ startX: enemy.x, startY: enemy.y, x: enemy.x, y: enemy.y, progress: 0 });
   }
 }, 50);
