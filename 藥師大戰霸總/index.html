@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <title>透視射擊遊戲</title>
   <style>
-    canvas { background: black; display: block; margin: auto; }
+    body { margin: 0; background: black; }
+    canvas { display: block; margin: auto; background: black; }
     #restartBtn, #toggleGridBtn {
       display: block;
-      margin: 20px auto;
+      margin: 10px auto;
       padding: 10px 20px;
       font-size: 18px;
       background: #444;
@@ -19,7 +20,7 @@
   </style>
 </head>
 <body>
-<canvas id="gameCanvas" width="800" height="600"></canvas>
+<canvas id="gameCanvas"></canvas>
 <button id="restartBtn">重新開始</button>
 <button id="toggleGridBtn">顯示格線</button>
 <script>
@@ -55,6 +56,15 @@ toggleGridBtn.addEventListener("click", () => {
   showGrid = !showGrid;
   toggleGridBtn.textContent = showGrid ? "隱藏格線" : "顯示格線";
 });
+
+// 自適應畫面
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight * 0.9;
+  initGame();
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
 function getPerspectiveX(y, baseX){
   return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y));
@@ -104,23 +114,30 @@ function initGame(){
   lastEnemyDodge = 0;
 }
 
-initGame();
+const playerMaxSpeed = () => canvas.width/5 / 60;
+let targetX = 0;
 
-const playerMaxSpeed = canvas.width/5 / 60;
-let targetX = player.x;
-
+// 滑鼠事件
 canvas.addEventListener("mousemove", e => {
   const rect = canvas.getBoundingClientRect();
   targetX = e.clientX - rect.left;
 });
+canvas.addEventListener("click", shootBullet);
 
-canvas.addEventListener("click", () => {
+// 觸控事件
+canvas.addEventListener("touchmove", e => {
+  const rect = canvas.getBoundingClientRect();
+  targetX = e.touches[0].clientX - rect.left;
+});
+canvas.addEventListener("touchstart", shootBullet);
+
+function shootBullet() {
   if(gameOver) return;
   let now = Date.now();
   if(now - lastPlayerShot < shotCooldown) return;
   lastPlayerShot = now;
   bullets.push({ startX: player.x, startY: player.y, x: player.x, y: player.y, progress: 0 });
-});
+}
 
 setInterval(() => {
   if(gameOver) return;
@@ -150,7 +167,8 @@ function update() {
   let playerWidth = pRightX - pLeftX;
 
   let dx = targetX - player.x;
-  if(Math.abs(dx) > playerMaxSpeed) dx = playerMaxSpeed * Math.sign(dx);
+  let maxSpeed = playerMaxSpeed();
+  if(Math.abs(dx) > maxSpeed) dx = maxSpeed * Math.sign(dx);
   player.x += dx;
 
   if(player.x - basePlayerW/2 < pLeftX) player.x = pLeftX + basePlayerW/2;
@@ -178,7 +196,7 @@ function update() {
   let enemyWidth = enemyCalc.width;
 
   let enemyW = basePlayerW * enemy.scale;
-  let enemySpeed = playerMaxSpeed * (enemyWidth / playerWidth);
+  let enemySpeed = playerMaxSpeed() * (enemyWidth / playerWidth);
 
   enemy.x += enemy.dir * enemySpeed;
   if(enemy.x - enemyW/2 <= getPerspectiveX(enemy.y, 0)){ 
@@ -190,7 +208,6 @@ function update() {
     enemy.dir = -1; 
   }
 
-  // 玩家子彈擊中敵人判定
   bullets.forEach(b => {
     let dx = b.x - enemy.x;
     let dy = b.y - enemy.y;
@@ -202,8 +219,7 @@ function update() {
     }
   });
 
-  // 敵人子彈擊中玩家判定
-  enemyBullets.forEach(b => {
+      enemyBullets.forEach(b => {
     let dx = b.x - player.x;
     let dy = b.y - player.y;
     let dist = Math.sqrt(dx*dx + dy*dy);
@@ -220,8 +236,10 @@ function update() {
   }
 }
 
-// 血條顯示
+// 血條顯示（恢復原本設定）
 function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
+  if(hp >= maxHP) return; // 滿血時不顯示血條
+  
   ctx.save();
   ctx.globalAlpha = 0.7;
 
@@ -247,6 +265,7 @@ function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
 // 預先計算格線座標
 const gridLines = [];
 function initGrid(){
+  gridLines.length = 0;
   for(let i=0;i<30;i++){
     let x = (canvas.width/30)*i;
     gridLines.push({x});
@@ -273,12 +292,10 @@ function drawGrid() {
 function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // 背景
   ctx.fillStyle = "skyblue";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-  // 顯示格線判斷
   if(showGrid){
     drawGrid();
   }
@@ -290,17 +307,14 @@ function draw() {
     return;
   }
 
-  // 玩家角色
   ctx.drawImage(playerImg, player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
   drawHPAbove(player.x, player.y - basePlayerH, playerHP, maxHP, basePlayerW, basePlayerH, false);
 
-  // 敵人角色
   let enemyW = basePlayerW * enemy.scale;
   let enemyH = basePlayerH * enemy.scale;
   ctx.drawImage(enemyImg, enemy.x - enemyW/2, enemy.y - enemyH, enemyW, enemyH);
   drawHPAbove(enemy.x, enemy.y - enemyH, enemyHP, maxHP, enemyW, enemyH, true);
 
-  // 玩家子彈
   ctx.fillStyle = "yellow";
   bullets.forEach(b => {
     let scale = getBulletScale(b.y);
@@ -309,7 +323,6 @@ function draw() {
     ctx.fill();
   });
 
-  // 敵人子彈
   ctx.fillStyle = "orange";
   enemyBullets.forEach(b => {
     let scale = getBulletScale(b.y);
@@ -330,14 +343,6 @@ gameLoop();
 restartBtn.addEventListener("click", () => {
   initGame();
 });
-
-// 遊戲主迴圈
-function gameLoop() {
-  update();
-  draw();
-  requestAnimationFrame(gameLoop);
-}
-gameLoop();
 </script>
 </body>
 </html>
