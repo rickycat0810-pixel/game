@@ -70,21 +70,57 @@ toggleGridBtn.addEventListener("click", () => {
   toggleGridBtn.textContent = showGrid ? "隱藏格線" : "顯示格線";
 });
 
+// 預先計算格線座標
+const gridLines = [];
+function initGrid(){
+  gridLines.length = 0;
+  for(let i=0;i<30;i++){
+    let x = (canvas.width/30)*i;
+    gridLines.push({x});
+  }
+}
+
 // 自適應畫面
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight * 0.9;
 
-  basePlayerW = canvas.width / 9;
+  // 玩家大小固定為寬度的 1/6
+  basePlayerW = canvas.width /9;
   basePlayerH = basePlayerW * (50/35);
+
+  // 重新計算消失點與底邊界
+  vanishPoint = { x: canvas.width/2, y: canvas.height*(31/48) };
+  bottomBoundaryY = canvas.height;
+
+  // 重新生成格線
+  initGrid();
+
+  // 校正玩家與敵人位置
+  if(player){
+    player.x = canvas.width/2;
+    player.y = bottomBoundaryY;
+  }
+  if(enemy){
+    let enemyY = vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y);
+    let initScale = getEnemyScale(enemyY);
+    enemy.x = vanishPoint.x;
+    enemy.y = enemyY;
+    enemy.scale = initScale.scale;
+  }
+
+  // 如果遊戲正在進行，重新繪製一次
+  if(!gameOver){
+    draw();
+  }
 }
 window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
+window.addEventListener("orientationchange", resizeCanvas);
 
+// 透視公式
 function getPerspectiveX(y, baseX){
   return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y));
 }
-
 function getEnemyScale(y) {
   let eLeftX = getPerspectiveX(y, 0);
   let eRightX = getPerspectiveX(y, canvas.width);
@@ -94,9 +130,8 @@ function getEnemyScale(y) {
   let pRightX = getPerspectiveX(player.y, canvas.width);
   let playerWidth = pRightX - pLeftX;
 
-  return { scale: (enemyWidth / playerWidth) * 1.0, width: enemyWidth };
+  return { scale: (enemyWidth / playerWidth), width: enemyWidth };
 }
-
 function getBulletScale(y) {
   let bLeftX = getPerspectiveX(y, 0);
   let bRightX = getPerspectiveX(y, canvas.width);
@@ -109,6 +144,7 @@ function getBulletScale(y) {
   return bulletWidth / playerWidth;
 }
 
+// 初始化遊戲
 function initGame(){
   vanishPoint = { x: canvas.width/2, y: canvas.height*(31/48) }; 
   bottomBoundaryY = canvas.height;
@@ -129,6 +165,8 @@ function initGame(){
   lastPlayerShot = 0;
   lastEnemyShot = 0;
   lastEnemyDodge = 0;
+
+  resizeCanvas(); // 確保初始畫面正確
 }
 
 const playerMaxSpeed = () => canvas.width/5 / 60;
@@ -147,7 +185,6 @@ canvas.addEventListener("touchmove", e => {
   const rect = canvas.getBoundingClientRect();
   targetX = e.touches[0].clientX - rect.left;
 }, { passive: false });
-
 canvas.addEventListener("touchstart", e => {
   e.preventDefault();
   shootBullet();
@@ -163,19 +200,14 @@ function shootBullet() {
   shootSound.play();
 }
 
-
-const predictionFactor = 0.5; // 預判子彈未來 20% 的路徑
-
-
-// 預測子彈在未來 progress + Δt 的位置
+// 預測子彈
+const predictionFactor = 0.5;
 function predictBulletPosition(b, deltaProgress){
   let futureProgress = b.progress + deltaProgress;
   let futureX = (1-futureProgress)*b.startX + futureProgress*vanishPoint.x;
   let futureY = (1-futureProgress)*b.startY + futureProgress*vanishPoint.y;
   return { x: futureX, y: futureY };
 }
-
-
 
 setInterval(() => {
   if(gameOver) return;
@@ -196,6 +228,9 @@ setInterval(() => {
 	enemyBullets.push({ startX: enemy.x, startY: enemy.y, x: enemy.x, y: enemy.y, progress: 0 });
   }
 }, 50);
+
+
+
 
 function update() {
   if(gameOver) return;
@@ -229,6 +264,7 @@ function update() {
   });
     enemyBullets = enemyBullets.filter(b => b.progress < 1);
 
+  // 敵人移動邊界判斷
   let enemyCalc = getEnemyScale(enemy.y);
   enemy.scale = enemyCalc.scale;
   let enemyWidth = enemyCalc.width;
@@ -273,6 +309,7 @@ function update() {
     }
   });
 
+  // 遊戲結束判斷
   if(playerHP <= 0 || enemyHP <= 0){ 
     gameOver = true; 
     restartBtn.textContent = "重新開始";
@@ -303,17 +340,6 @@ function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
   ctx.restore();
 }
 
-// 預先計算格線座標
-const gridLines = [];
-function initGrid(){
-  gridLines.length = 0;
-  for(let i=0;i<30;i++){
-    let x = (canvas.width/30)*i;
-    gridLines.push({x});
-  }
-}
-initGrid();
-
 // 繪製格線
 function drawGrid() {
   ctx.strokeStyle = "gray";
@@ -334,7 +360,10 @@ function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   // 背景
-  ctx.fillStyle = "skyblue";
+  let gradient = ctx.createLinearGradient(0,0,0,canvas.height);
+  gradient.addColorStop(0,"skyblue");
+  gradient.addColorStop(1,"white");
+  ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
@@ -373,24 +402,23 @@ function draw() {
     ctx.fill();
   });
 
-  // 玩家（最後繪製，確保在前景）
+  // 玩家
   ctx.drawImage(playerImg, player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
   drawHPAbove(player.x, player.y, playerHP, maxHP, basePlayerW, basePlayerH, false);
 }
 
-
+// 遊戲迴圈
 function gameLoop() {
   update();
   draw();
   if(!gameOver) requestAnimationFrame(gameLoop);
 }
 
-
 // 開始/重新開始按鈕邏輯
 restartBtn.addEventListener("click", () => {
   initGame();
-  bgm.play(); // 使用者點擊後才播放音樂
-  gameLoop(); // 在這裡啟動遊戲迴圈
+  bgm.play();
+  gameLoop();
 });
 </script>
 </body>
