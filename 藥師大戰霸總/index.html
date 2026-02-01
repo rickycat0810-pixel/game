@@ -8,8 +8,8 @@
     html, body {
       margin: 0;
       padding: 0;
-      overflow: hidden;   /* 禁止滾動 */
-      touch-action: none; /* 禁止觸控拖曳 */
+      overflow: hidden;
+      touch-action: none;
       background: black;
       height: 100%;
     }
@@ -17,7 +17,7 @@
       display: block; 
       margin: auto; 
       background: black; 
-      touch-action: none; /* 確保 canvas 不觸發滾動 */
+      touch-action: none;
     }
     #restartBtn, #toggleGridBtn {
       display: block;
@@ -29,12 +29,12 @@
       border: none;
       cursor: pointer;
     }
-    #restartBtn { display: none; }
+    #toggleGridBtn { display: none; }
   </style>
 </head>
 <body>
 <canvas id="gameCanvas"></canvas>
-<button id="restartBtn">重新開始</button>
+<button id="restartBtn">開始遊戲</button>
 <button id="toggleGridBtn">顯示格線</button>
 <script>
 const canvas = document.getElementById("gameCanvas");
@@ -50,19 +50,18 @@ enemyImg.src = "敵人.png";
 const bgImg = new Image();
 bgImg.src = "背景.png";
 
-// 可調整倍率
-const scaleFactor = 1.0;
-const basePlayerW = (canvas.width/6) * scaleFactor;
-const basePlayerH = basePlayerW*(50/35);
+// 載入音效
+const bgm = new Audio("bgm.mp3");
+bgm.loop = true;
+bgm.volume = 0.5;
 
+const shootSound = new Audio("發射.mp3");
+const hitSound = new Audio("被擊中.mp3");
 
+let basePlayerW, basePlayerH;
 let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP, enemyHP, gameOver;
-let lastPlayerShot = 0;
-let lastEnemyShot = 0;
-let lastEnemyDodge = 0;
-const shotCooldown = 500;
-const dodgeCooldown = 200;
-const maxHP = 5;
+let lastPlayerShot = 0, lastEnemyShot = 0, lastEnemyDodge = 0;
+const shotCooldown = 500, dodgeCooldown = 200, maxHP = 5;
 
 // 控制格線顯示
 let showGrid = false;
@@ -75,7 +74,9 @@ toggleGridBtn.addEventListener("click", () => {
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight * 0.9;
-  initGame();
+
+  basePlayerW = canvas.width / 9;
+  basePlayerH = basePlayerW * (50/35);
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
@@ -93,7 +94,7 @@ function getEnemyScale(y) {
   let pRightX = getPerspectiveX(player.y, canvas.width);
   let playerWidth = pRightX - pLeftX;
 
-  return { scale: (enemyWidth / playerWidth) * 2.0, width: enemyWidth };
+  return { scale: (enemyWidth / playerWidth) * 1.0, width: enemyWidth };
 }
 
 function getBulletScale(y) {
@@ -114,8 +115,7 @@ function initGame(){
     
   player = { x: canvas.width/2, y: bottomBoundaryY };
   
-  let enemyY = vanishPoint.y + (1/8) * (bottomBoundaryY - vanishPoint.y);
-  
+  let enemyY = vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y);
   let initScale = getEnemyScale(enemyY);
   enemy = { x: vanishPoint.x, y: enemyY, dir: 1, scale: initScale.scale };
 
@@ -124,6 +124,7 @@ function initGame(){
   playerHP = maxHP;
   enemyHP = maxHP;
   gameOver = false;
+  toggleGridBtn.style.display = "block";
   restartBtn.style.display = "none";
   lastPlayerShot = 0;
   lastEnemyShot = 0;
@@ -140,7 +141,7 @@ canvas.addEventListener("mousemove", e => {
 });
 canvas.addEventListener("click", shootBullet);
 
-// 觸控事件 (阻止預設行為)
+// 觸控事件
 canvas.addEventListener("touchmove", e => {
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
@@ -157,8 +158,24 @@ function shootBullet() {
   let now = Date.now();
   if(now - lastPlayerShot < shotCooldown) return;
   lastPlayerShot = now;
-  bullets.push({ startX: player.x, startY: player.y-basePlayerH/2, x: player.x, y: player.y-basePlayerH/2, progress: 0 });
+  bullets.push({ startX: player.x, startY: player.y - basePlayerH*0.5, x: player.x, y: player.y - basePlayerH*0.5, progress: 0 });
+  shootSound.currentTime = 0;
+  shootSound.play();
 }
+
+
+const predictionFactor = 0.5; // 預判子彈未來 20% 的路徑
+
+
+// 預測子彈在未來 progress + Δt 的位置
+function predictBulletPosition(b, deltaProgress){
+  let futureProgress = b.progress + deltaProgress;
+  let futureX = (1-futureProgress)*b.startX + futureProgress*vanishPoint.x;
+  let futureY = (1-futureProgress)*b.startY + futureProgress*vanishPoint.y;
+  return { x: futureX, y: futureY };
+}
+
+
 
 setInterval(() => {
   if(gameOver) return;
@@ -176,11 +193,7 @@ setInterval(() => {
   let targetX = vanishPoint.x + slope * (bottomBoundaryY - vanishPoint.y);
   if(Math.abs(targetX - player.x) < 30){
     lastEnemyShot = now;
-    
-    let enemyW = basePlayerW * enemy.scale;
-    let enemyH = basePlayerH * enemy.scale;
-    
-    enemyBullets.push({ startX: enemy.x, startY: enemy.y, x: enemy.x, y: enemy.y, progress: 0 });
+	enemyBullets.push({ startX: enemy.x, startY: enemy.y, x: enemy.x, y: enemy.y, progress: 0 });
   }
 }, 50);
 
@@ -198,7 +211,7 @@ function update() {
 
   if(player.x - basePlayerW/2 < pLeftX) player.x = pLeftX + basePlayerW/2;
   if(player.x + basePlayerW/2 > pRightX) player.x = pRightX - basePlayerW/2;
-
+ 
   bullets.forEach(b => {
     b.progress += 0.02;
     b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x;
@@ -232,7 +245,7 @@ function update() {
     enemy.x = getPerspectiveX(enemy.y, canvas.width) - enemyW/2; 
     enemy.dir = -1; 
   }
-
+  // 玩家子彈碰撞判定
   bullets.forEach(b => {
     let dx = b.x - enemy.x;
     let dy = b.y - enemy.y;
@@ -241,9 +254,12 @@ function update() {
     if(dist < hitbox){
       enemyHP--; 
       b.progress = 1;
+      hitSound.currentTime = 0;
+      hitSound.play();
     }
   });
 
+  // 敵人子彈碰撞判定
   enemyBullets.forEach(b => {
     let dx = b.x - player.x;
     let dy = b.y - player.y;
@@ -252,18 +268,21 @@ function update() {
     if(dist < hitbox){
       playerHP--; 
       b.progress = 1;
+      hitSound.currentTime = 0;
+      hitSound.play();
     }
   });
 
   if(playerHP <= 0 || enemyHP <= 0){ 
     gameOver = true; 
+    restartBtn.textContent = "重新開始";
     restartBtn.style.display = "block"; 
   }
 }
 
 // 血條顯示
 function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
-  if(hp >= maxHP) return; // 滿血時不顯示血條
+  if(hp >= maxHP) return;
   
   ctx.save();
   ctx.globalAlpha = 0.7;
@@ -271,7 +290,7 @@ function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
   let barHeight = isEnemy ? Math.max(6, 10 * (charHeight/basePlayerH)) : 10;
 
   ctx.fillStyle = "gray";
-  ctx.fillRect(x - charWidth/2, y - 20, charWidth, barHeight);
+  ctx.fillRect(x - charWidth/2, y - charHeight - 10, charWidth, barHeight);
 
   let color = "green";
   if(hp <= 3) color = "yellow";
@@ -279,7 +298,7 @@ function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
   if(hp === 1 && Math.floor(Date.now()/300) % 2 === 0) color = "rgba(255,0,0,0)";
 
   ctx.fillStyle = color;
-  ctx.fillRect(x - charWidth/2, y - 20, charWidth * (hp/maxHP), barHeight);
+  ctx.fillRect(x - charWidth/2, y - charHeight - 10, charWidth * (hp/maxHP), barHeight);
 
   ctx.restore();
 }
@@ -314,10 +333,12 @@ function drawGrid() {
 function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
+  // 背景
   ctx.fillStyle = "skyblue";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
+  // 格線
   if(showGrid){
     drawGrid();
   }
@@ -329,14 +350,13 @@ function draw() {
     return;
   }
 
-  ctx.drawImage(playerImg, player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
-  drawHPAbove(player.x, player.y - basePlayerH, playerHP, maxHP, basePlayerW, basePlayerH, false);
-
+  // 敵人
   let enemyW = basePlayerW * enemy.scale;
   let enemyH = basePlayerH * enemy.scale;
   ctx.drawImage(enemyImg, enemy.x - enemyW/2, enemy.y - enemyH, enemyW, enemyH);
-  drawHPAbove(enemy.x, enemy.y - enemyH, enemyHP, maxHP, enemyW, enemyH, true);
+  drawHPAbove(enemy.x, enemy.y, enemyHP, maxHP, enemyW, enemyH, true);
 
+  // 子彈
   ctx.fillStyle = "yellow";
   bullets.forEach(b => {
     let scale = getBulletScale(b.y);
@@ -352,18 +372,25 @@ function draw() {
     ctx.arc(b.x, b.y, 8*scale, 0, Math.PI*2);
     ctx.fill();
   });
+
+  // 玩家（最後繪製，確保在前景）
+  ctx.drawImage(playerImg, player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
+  drawHPAbove(player.x, player.y, playerHP, maxHP, basePlayerW, basePlayerH, false);
 }
+
 
 function gameLoop() {
   update();
   draw();
-  requestAnimationFrame(gameLoop);
+  if(!gameOver) requestAnimationFrame(gameLoop);
 }
-gameLoop();
 
-// 重新開始按鈕邏輯
+
+// 開始/重新開始按鈕邏輯
 restartBtn.addEventListener("click", () => {
   initGame();
+  bgm.play(); // 使用者點擊後才播放音樂
+  gameLoop(); // 在這裡啟動遊戲迴圈
 });
 </script>
 </body>
