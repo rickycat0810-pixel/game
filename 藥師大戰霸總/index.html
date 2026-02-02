@@ -42,6 +42,19 @@ const ctx = canvas.getContext("2d");
 const restartBtn = document.getElementById("restartBtn");
 const toggleGridBtn = document.getElementById("toggleGridBtn");
 
+
+const RICO_MATH = 
+{
+ get ViewDeep() { let RICO_BUF = bottomBoundaryY - vanishPoint.y; if(RICO_BUF < 1) RICO_BUF = 1; return RICO_BUF; }
+
+
+};
+
+
+
+
+
+
 // 載入圖片
 const playerImg = new Image();
 playerImg.src = "玩家.png";
@@ -82,10 +95,13 @@ function initGrid(){
 
 // 自適應畫面
 function resizeCanvas() {
+  let oldW = canvas.width; 
+  let oldH = canvas.height;
+
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight * 0.9;
 
-  // 玩家大小固定為寬度的 1/6
+  // 玩家大小固定為寬度的 1/9
   basePlayerW = canvas.width /9;
   basePlayerH = basePlayerW * (50/35);
 
@@ -96,30 +112,55 @@ function resizeCanvas() {
   // 重新生成格線
   initGrid();
 
-  // 校正玩家與敵人位置
+  // 玩家依比例調整
   if(player){
-    player.x = canvas.width/2;
-    player.y = bottomBoundaryY;
+    //player.x = canvas.width/2;
+    //player.y = bottomBoundaryY;
+	player.x = player.x * (canvas.width / oldW); 
+	player.y = player.y * (canvas.height / oldH);
   }
+  
+  // 敵人依比例調整
   if(enemy){
-    let enemyY = vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y);
-    let initScale = getEnemyScale(enemyY);
-    enemy.x = vanishPoint.x;
-    enemy.y = enemyY;
-    enemy.scale = initScale.scale;
+    //let enemyY = vanishPoint.y + (1/5) * RICO_MATH.ViewDeep;
+    //let initScale = getEnemyScale(enemyY);
+    //enemy.x = vanishPoint.x;
+    //enemy.y = enemyY;
+    //enemy.scale = initScale.scale;
+	enemy.x = enemy.x * (canvas.width / oldW); 
+	enemy.y = enemy.y * (canvas.height / oldH); 
+	let enemyCalc = getEnemyScale(enemy.y); 
+	enemy.scale = enemyCalc.scale;	
   }
 
+  // 子彈依比例調整 
+  bullets.forEach(b => { 
+    b.startX = b.startX * (canvas.width / oldW); 
+	b.startY = b.startY * (canvas.height / oldH); 
+	b.x = b.x * (canvas.width / oldW); 
+	b.y = b.y * (canvas.height / oldH); 
+  }); 
+  
+  // 敵人子彈比例調整
+  enemyBullets.forEach(b => { 
+    b.startX = b.startX * (canvas.width / oldW); 
+	b.startY = b.startY * (canvas.height / oldH); 
+	b.x = b.x * (canvas.width / oldW); 
+	b.y = b.y * (canvas.height / oldH); 
+  });
+
+
   // 如果遊戲正在進行，重新繪製一次
-  if(!gameOver){
-    draw();
-  }
+  //if(!gameOver){
+  //  draw();
+  //}
 }
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("orientationchange", resizeCanvas);
 
 // 透視公式
 function getPerspectiveX(y, baseX){
-  return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y));
+  return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / RICO_MATH.ViewDeep);
 }
 function getEnemyScale(y) {
   let eLeftX = getPerspectiveX(y, 0);
@@ -151,7 +192,7 @@ function initGame(){
     
   player = { x: canvas.width/2, y: bottomBoundaryY };
   
-  let enemyY = vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y);
+  let enemyY = vanishPoint.y + (1/5) * RICO_MATH.ViewDeep;
   let initScale = getEnemyScale(enemyY);
   enemy = { x: vanishPoint.x, y: enemyY, dir: 1, scale: initScale.scale };
 
@@ -222,7 +263,7 @@ setInterval(() => {
   }
 
   let slope = (enemy.x - vanishPoint.x) / (enemy.y - vanishPoint.y);
-  let targetX = vanishPoint.x + slope * (bottomBoundaryY - vanishPoint.y);
+  let targetX = vanishPoint.x + slope * RICO_MATH.ViewDeep;
   if(Math.abs(targetX - player.x) < 30){
     lastEnemyShot = now;
 	enemyBullets.push({ startX: enemy.x, startY: enemy.y, x: enemy.x, y: enemy.y, progress: 0 });
@@ -257,7 +298,7 @@ function update() {
   enemyBullets.forEach(b => {
     b.progress += 0.02;
     let slope = (b.startX - vanishPoint.x) / (b.startY - vanishPoint.y);
-    let targetX = vanishPoint.x + slope * (bottomBoundaryY - vanishPoint.y);
+    let targetX = vanishPoint.x + slope * RICO_MATH.ViewDeep;
     let targetY = bottomBoundaryY;
     b.x = (1-b.progress)*b.startX + b.progress*targetX;
     b.y = (1-b.progress)*b.startY + b.progress*targetY;
