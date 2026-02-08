@@ -338,18 +338,35 @@ function gameLoop() { update(); draw(); if(!gameOver) requestAnimationFrame(game
 
 restartBtn.addEventListener("click", () => { initGame(); bgm.play(); gameLoop(); });
 
+// 修改後的監聽與自動提示邏輯
 db.ref("players").on("value", snapshot => { 
     otherPlayers = snapshot.val() || {}; 
     const sortedIds = Object.keys(otherPlayers).sort();
     const myIndex = sortedIds.indexOf(playerId);
+    
+    // 找出目前的配對對手
     if (myIndex !== -1) {
         const pairIndex = (myIndex % 2 === 0) ? myIndex + 1 : myIndex - 1;
         opponentId = sortedIds[pairIndex] || null;
     } else {
         opponentId = null;
     }
+
+    // 主動提示邏輯
+    if (!gameOver) { // 只有在遊戲未開始或結束時更新提示
+        if (opponentId) {
+            restartBtn.textContent = "對手已連線，點擊開始對戰";
+            restartBtn.style.background = "#28a745"; // 變更顏色提示已就緒
+        } else {
+            restartBtn.textContent = "等待對手中...";
+            restartBtn.style.background = "#444";
+        }
+    }
 });
-db.ref("bullets").on("value", snapshot => { otherBullets = snapshot.val() || {}; });
+
+db.ref("bullets").on("value", snapshot => { 
+    otherBullets = snapshot.val() || {}; 
+});
 
 window.addEventListener("beforeunload", () => {
     db.ref("players/" + playerId).remove();
