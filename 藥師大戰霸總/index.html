@@ -41,13 +41,15 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
 const firebaseConfig = {
-    apiKey: "AIzaSyDsQKp4MbIZiI_K95S8vy4q_q9pfx1c3aw",
-    authDomain: "my-shooting-game-68732.firebaseapp.com",
-    projectId: "my-shooting-game-68732",
-    storageBucket: "my-shooting-game-68732.firebasestorage.app",
-    messagingSenderId: "212506441565",
-    appId: "1:212506441565:web:8fe492bef5abd7be711ab4"
-  };
+  apiKey: "AIzaSyDsQKp4MbIZiI_K95S8vy4q_q9pfx1c3aw",
+  authDomain: "my-shooting-game-68732.firebaseapp.com",
+  databaseURL: "https://my-shooting-game-68732-default-rtdb.asia-southeast1.firebasedatabase.app", // ← 手動補上
+  projectId: "my-shooting-game-68732",
+  storageBucket: "my-shooting-game-68732.appspot.com", // ← 修正拼寫
+  messagingSenderId: "212506441565",
+  appId: "1:212506441565:web:8fe492bef5abd7be711ab4"
+};
+
 const app = firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
