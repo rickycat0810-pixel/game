@@ -267,12 +267,15 @@ function update() {
   activeEBullets.forEach(b => {
   let bx, by;
   if (opponentId) {
-    // 1. 先還原這顆子彈在本地視角應有的 Y 座標
-    let curBulletY = vanishPoint.y + (b.yRatio * (bottomBoundaryY - vanishPoint.y));
-    // 2. 根據該 Y 座標取得左右邊界
+    // 【修正點】反轉 Y 比例：1 - b.yRatio
+    // 當對手子彈靠近他的消失點時(yRatio趨近0)，在本地畫面應趨近 1 (靠近玩家)
+    let invertedYRatio = 1 - b.yRatio; 
+    let curBulletY = vanishPoint.y + (invertedYRatio * (bottomBoundaryY - vanishPoint.y));
+    
     let bL = getPerspectiveX(curBulletY, 0);
     let bR = getPerspectiveX(curBulletY, canvas.width);
-    // 3. 鏡像計算 X 並賦予正確的 Y
+    
+    // 鏡像 X 軸
     bx = bL + (1 - b.xRatio) * (bR - bL);
     by = curBulletY;
   } else {
@@ -280,10 +283,10 @@ function update() {
     by = b.y;
   }
 
-  // 4. 進行碰撞檢查
+  // 進行碰撞檢查
   if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
     playerHP--;
-    b.progress = 1; 
+    b.progress = 1; // 標記已擊中
     hitSound.currentTime = 0; hitSound.play();
   }
 });
@@ -395,9 +398,13 @@ function draw() {
   activeEBullets.forEach(b => {
   let bx, by;
   if (opponentId) {
-    let bulletY = vanishPoint.y + (b.yRatio * RICO_MATH.ViewDeep);
+    // 【修正點】同步反轉 Y 比例
+    let invertedYRatio = 1 - b.yRatio;
+    let bulletY = vanishPoint.y + (invertedYRatio * (bottomBoundaryY - vanishPoint.y));
+    
     let bL = getPerspectiveX(bulletY, 0);
     let bR = getPerspectiveX(bulletY, canvas.width);
+    
     bx = bL + (1 - b.xRatio) * (bR - bL);
     by = bulletY;
   } else {
@@ -405,6 +412,7 @@ function draw() {
     by = b.y;
   }
   ctx.beginPath();
+  // 使用反轉後的 by 來計算正確的透視縮放大小
   ctx.arc(bx, by, (basePlayerW / 8) * getBulletScale(by), 0, Math.PI * 2);
   ctx.fill();
 });
