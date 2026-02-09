@@ -40,6 +40,10 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
+// 在 script 開頭定義
+let lastFirebaseUpdateTime = 0;
+const FIREBASE_TICK_RATE = 20; // 20ms=50hz
+
 // --- Firebase 配置 ---
 const firebaseConfig = {
   apiKey: "AIzaSyDsQKp4MbIZiI_K95S8vy4q_q9pfx1c3aw",
@@ -268,24 +272,21 @@ let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[op
 activeEBullets.forEach(b => {
   let bx, by;
   if (opponentId) {
-    // 1. 取得對手的原始比例並鏡像
-    let mirrorXRatio = 1 - b.xRatio; 
+    let mirrorXRatio = 1 - b.xRatio;
+    let startX = getPerspectiveX(curE.y, canvas.width * mirrorXRatio);
+    let endX = getPerspectiveX(bottomBoundaryY, canvas.width * mirrorXRatio);
     
-    // 2. 計算子彈在玩家底部的預期落點 (擴散關鍵)
-    // 讓子彈根據與中心點的距離，按比例延伸到畫面上方或下方
-    let pLeftX = getPerspectiveX(bottomBoundaryY, 0);
-    let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
-    let targetXAtBottom = pLeftX + mirrorXRatio * (pRightX - pLeftX);
-    
-    // 3. 根據 progress 進行線性插值 (從遠處對手飛向近處玩家)
-    bx = (1 - b.progress) * curE.x + b.progress * targetXAtBottom;
+    bx = (1 - b.progress) * startX + b.progress * endX;
     by = (1 - b.progress) * curE.y + b.progress * bottomBoundaryY;
 
-    // 4. 碰撞檢查 (增加判定範圍以符合透視感)
-    let hitRange = (basePlayerW / 2) * getBulletScale(by);
+    // --- 保留並修正 hitRange 邏輯 ---
+    // 根據子彈當前的 Y 座標計算應有的判定寬度
+    let hitRange = (basePlayerW / 2) * getBulletScale(by); 
+    
+    // 使用 Math.max 確保最小判定區域，避免子彈太小時點不到
     if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < Math.max(hitRange, 20)) {
       playerHP--;
-      b.progress = 1; // 標記擊中
+      b.progress = 1.1; 
       hitSound.currentTime = 0; hitSound.play();
     }
   } else {
@@ -301,15 +302,24 @@ activeEBullets.forEach(b => {
     gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
     setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000); // 延時返回大廳
   }
+  
+  // 在 update 函數的最後一行呼叫
+  syncToFirebase();
+}
+
+// 在 update() 函數的最後，將 userRef.update 包裹起來：
+ function syncToFirebase() {
+  const now = Date.now();
+  if (now - lastFirebaseUpdateTime < FIREBASE_TICK_RATE) return; // 這裡使用了您定義的變數
+  lastFirebaseUpdateTime = now;
+
+  if (!player || gameOver) return;
 
   userRef.update({ 
     x: player.x / canvas.width, 
-    y: player.y, 
     hp: playerHP, 
     bullets: bullets.map(b => ({
-      // 子彈的 X 也需要轉為比例上傳，才能確保鏡像正確
-      xRatio: b.x / canvas.width,
-      yRatio: (b.y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y),
+      xRatio: b.startX / canvas.width, // 必須上傳發射時的原始比例，路徑才會是直線
       progress: b.progress
     }))
   });
@@ -403,35 +413,30 @@ function draw() {
   
   // --- draw() 函式內關於子彈繪製的邏輯修正 ---
 activeEBullets.forEach(b => {
-  let bx, by;
-  let currentScale = 1;
-
+  let bx, by, currentScale;
   if (opponentId && otherPlayers[opponentId]) {
-    // 同步 update 的鏡像邏輯
     let mirrorXRatio = 1 - b.xRatio;
-    let pLeftX = getPerspectiveX(bottomBoundaryY, 0);
-    let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
-    let targetXAtBottom = pLeftX + mirrorXRatio * (pRightX - pLeftX);
+    let startX = getPerspectiveX(eY, canvas.width * mirrorXRatio);
+    let endX = getPerspectiveX(bottomBoundaryY, canvas.width * mirrorXRatio);
     
-    // 從對手胸口高度發射
-    let startY = eY - (eH / 2);
-    bx = (1 - b.progress) * eX + b.progress * targetXAtBottom;
-    by = (1 - b.progress) * startY + b.progress * bottomBoundaryY;
+    bx = (1 - b.progress) * startX + b.progress * endX;
+    by = (1 - b.progress) * (eY - eH/2) + b.progress * bottomBoundaryY;
     
-    currentScale = getBulletScale(by);
+    // 保留：計算當前深度的縮放比例
+    currentScale = getBulletScale(by); 
   } else {
     bx = b.x; by = b.y;
     currentScale = getBulletScale(by);
   }
 
-  // 繪製具備透視感的子彈
+  // 使用保留的 currentScale 繪製子彈
   ctx.beginPath();
   ctx.fillStyle = "orange";
-  let bRadius = (basePlayerW / 8) * currentScale;
+  let bRadius = (basePlayerW / 8) * currentScale; // 比例縮放
   ctx.arc(bx, by, Math.max(bRadius, 3), 0, Math.PI * 2);
   ctx.fill();
   
-  // 增加外光暈增強視覺
+  // 外光暈特效
   ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
   ctx.lineWidth = 2 * currentScale;
   ctx.stroke();
