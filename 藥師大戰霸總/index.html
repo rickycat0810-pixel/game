@@ -220,22 +220,24 @@ function update() {
   let curE = { x: 0, y: 0, w: 0, isPVP: false };
   if (opponentId && otherPlayers[opponentId]) {
     let op = otherPlayers[opponentId];
-  
-    // 1. 計算對手在遠方的有效邊界 (考慮透視縮放後的活動寬度)
-    let eLeftX = getPerspectiveX(op.y, 0); 
-    let eRightX = getPerspectiveX(op.y, canvas.width);
-    let effectiveWidth = eRightX - eLeftX;
 
-    // 2. 將對手的 X 座標比例化，並進行左右鏡像反轉 (1 - ratio)
-    // op.x / canvas.width 取得對手在下方的百分比位置
-    let ratio = op.x / canvas.width;
-  
-    // 3. 套入計算系統：將比例映射回遠方的 X 座標
-    curE.x = eLeftX + (1 - ratio) * effectiveWidth; 
+    // 1. 取得對手在對面畫面的比例 (0~1)
+    // 由於 op.x 現在是比例，直接使用
+    let ratio = op.x; 
+
+    // 2. 計算本地端遠方的有效邊界 (敵人移動的範圍限制)
+    // 這裡計算在 y 軸位置時，畫面最左與最右的透視 X 座標
+    let eLeftLimit = getPerspectiveX(op.y, 0); 
+    let eRightLimit = getPerspectiveX(op.y, canvas.width);
+    let moveRange = eRightLimit - eLeftLimit;
+
+    // 3. 根據比例還原位置，並進行鏡像反轉 (1 - ratio)
+    // 這樣當對手在他畫面左邊時，在你畫面會是在右邊
+    curE.x = eLeftLimit + (1 - ratio) * moveRange; 
     curE.y = op.y;
     curE.w = basePlayerW * getEnemyScale(op.y).scale;
     curE.isPVP = true;
-  
+
     enemyHP = op.hp; 
     enemyBullets = [];
   } else {
@@ -265,8 +267,15 @@ function update() {
 
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   activeEBullets.forEach(b => {
-    let bx = opponentId ? (canvas.width - b.x) : b.x;
-    if(Math.sqrt((bx-player.x)**2 + (b.y-player.y)**2) < basePlayerW/2) {
+  let bx, by;	
+  if(opponentId) {
+	let bL = getPerspectiveX(b.y, 0);
+	let bR = getPerspectiveX(b.y, canvas.width);
+	bx = bL + (1 - b.xRatio) * (bR - bL);
+	by = (1 - b.progress) * vanishPoint.y + b.progress * bottomBoundaryY;
+	} else { bx = b.x; by = b.y; }
+	
+    if(Math.sqrt((bx-player.x)**2 + (by-player.y)**2) < basePlayerW/2) {
       playerHP--; b.progress = 1; hitSound.currentTime = 0; hitSound.play();
     }
   });
@@ -276,7 +285,19 @@ function update() {
     setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000); // 延時返回大廳
   }
 
-  userRef.update({ x: player.x, y: player.y, hp: playerHP, bullets: bullets });
+  // 在 update() 函式末尾
+  // 將原本的 player.x 改為比例：player.x / canvas.width
+  userRef.update({ 
+    x: player.x / canvas.width, 
+    y: player.y, 
+    hp: playerHP, 
+    bullets: bullets.map(b => ({
+      // 子彈的 X 也需要轉為比例上傳，才能確保鏡像正確
+      xRatio: b.x / canvas.width,
+      y: b.y,
+      progress: b.progress
+    }))
+  });
 }
 
 function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
@@ -320,7 +341,13 @@ function draw() {
 
   let eX, eY, eHP, eLabel, eColor;
   if(opponentId && otherPlayers[opponentId]) {
-    let op = otherPlayers[opponentId]; eX = canvas.width - op.x; eY = op.y; eHP = op.hp; eLabel = "連線對手"; eColor = "cyan";
+    let op = otherPlayers[opponentId];
+	let ratio = op.x;
+	let eL = getPerspectiveX(op.y, 0);
+	let eR = getPerspectiveX(op.y, canvas.width);
+	eX = eL + (1 - ratio) * (eR - eL); 
+	eY = op.y; eHP = op.hp; 
+	eLabel = "連線對手"; eColor = "cyan";
   } else {
     eX = enemy.x; eY = enemy.y; eHP = enemyHP; eLabel = "AI 敵人"; eColor = "white";
   }
@@ -331,10 +358,12 @@ function draw() {
   let opFacing = 1; 
   if (opponentId && otherPlayers[opponentId]) {
     // 取得對手的原始比例 (0~1)
-    let ratio = otherPlayers[opponentId].x / canvas.width;
+    //let ratio = otherPlayers[opponentId].x / canvas.width;
     // 如果比例小於 0.5 (在對手的左半邊)，我們讓貼圖翻轉，或是根據移動增量判斷
     // 這裡簡單與玩家的 facingRight 邏輯對應，達成左右相反
-    opFacing = (ratio > 0.5) ? 1 : -1; 
+    let op = otherPlayers[opponentId];
+	let ratio = op.x;
+	opFacing = (ratio > 0.5) ? 1 : -1; 
   } else {
     // AI 模式則根據其 dir 變數
     opFacing = enemy.dir === 1 ? -1 : 1; 
@@ -355,16 +384,18 @@ function draw() {
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   
   activeEBullets.forEach(b => {
-  let bx;
+  let bx, by;
   if(opponentId) {
     // 同樣使用透視比例公式轉換子彈 X 座標
     let bLeftX = getPerspectiveX(b.y, 0);
     let bRightX = getPerspectiveX(b.y, canvas.width);
-    bx = bLeftX + (1 - (b.x / canvas.width)) * (bRightX - bLeftX);
+    bx = bLeftX + (1 - b.xRatio) * (bRightX - bLeftX);
+	by = (1 - b.progress) * vanishPoint.y + b.progress * bottomBoundaryY;
   } else {
     bx = b.x;
+	by = b.y;
   }
-  ctx.beginPath(); ctx.arc(bx, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bx, by, (basePlayerW/8)*getBulletScale(by), 0, Math.PI*2); ctx.fill();
 });
 
   ctx.fillStyle = "yellow";
