@@ -262,34 +262,40 @@ function update() {
     }
   });
 
+  // --- 修正後的對手子彈處理邏輯 ---
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   
   activeEBullets.forEach(b => {
-  let bx, by;
-  if (opponentId) {
-    // 【修正點】反轉 Y 比例：1 - b.yRatio
-    // 當對手子彈靠近他的消失點時(yRatio趨近0)，在本地畫面應趨近 1 (靠近玩家)
-    let invertedYRatio = 1 - b.yRatio; 
-    let curBulletY = vanishPoint.y + (invertedYRatio * (bottomBoundaryY - vanishPoint.y));
-    
-    let bL = getPerspectiveX(curBulletY, 0);
-    let bR = getPerspectiveX(curBulletY, canvas.width);
-    
-    // 鏡像 X 軸
-    bx = bL + (1 - b.xRatio) * (bR - bL);
-    by = curBulletY;
-  } else {
-    bx = b.x;
-    by = b.y;
-  }
+    let bx, by;
+    if (opponentId) {
+      // 1. X軸擴散：使用鏡像比例計算底端落點
+      let mirrorXRatio = 1 - b.xRatio;
+      let targetXAtBottom = getPerspectiveX(bottomBoundaryY, mirrorXRatio * canvas.width);
+      
+      // 2. 位置插值：從對手頭像位置飛往玩家底端落點
+      // 此處 progress 由對手同步，會自動產生「遠慢近快」的透視速度感
+      bx = (1 - b.progress) * curE.x + b.progress * targetXAtBottom;
+      by = (1 - b.progress) * curE.y + b.progress * bottomBoundaryY;
 
-  // 進行碰撞檢查
-  if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
-    playerHP--;
-    b.progress = 1; // 標記已擊中
-    hitSound.currentTime = 0; hitSound.play();
-  }
-});
+      // 3. 碰撞檢查
+      // 子彈判定大小也要隨透視縮放，避免遠處太容易被打中
+      let hitRange = (basePlayerW / 2) * getBulletScale(by);
+      if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < Math.max(hitRange, 15)) {
+        playerHP--;
+        b.progress = 1; // 標記擊中以過濾
+        hitSound.currentTime = 0; hitSound.play();
+      }
+    } else {
+      // AI 模式維持原本邏輯
+      bx = b.x;
+      by = b.y;
+      if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
+        playerHP--;
+        b.progress = 1;
+        hitSound.currentTime = 0; hitSound.play();
+      }
+    }
+  });
 
   if(playerHP <= 0 || (opponentId && enemyHP <= 0) || (!opponentId && enemyHP <= 0)){
     gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
@@ -395,27 +401,46 @@ function draw() {
   ctx.fillStyle = "orange";
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   
+  // --- 在 draw() 函式中尋找 activeEBullets.forEach 區塊 ---
   activeEBullets.forEach(b => {
-  let bx, by;
-  if (opponentId) {
-    // 【修正點】同步反轉 Y 比例
-    let invertedYRatio = 1 - b.yRatio;
-    let bulletY = vanishPoint.y + (invertedYRatio * (bottomBoundaryY - vanishPoint.y));
+    let bx, by;
+    // 取得當前子彈對應的縮放比例（用於改變子彈大小）
+    let currentScale = 1;
+
+    if (opponentId && otherPlayers[opponentId]) {
+      // 1. 取得鏡像 X 比例
+      let mirrorXRatio = 1 - b.xRatio;
+      let targetXAtBottom = getPerspectiveX(bottomBoundaryY, mirrorXRatio * canvas.width);
+      
+      // 2. 計算起始與結束的 Z 軸高度偏移 (讓子彈從胸口發出)
+      let startY = eY - (eH / 2); 
+      let endY = bottomBoundaryY - (basePlayerH / 2);
+
+      // 3. 執行線性插值
+      bx = (1 - b.progress) * eX + b.progress * targetXAtBottom;
+      by = (1 - b.progress) * startY + b.progress * endY;
+      
+      currentScale = getBulletScale(by);
+    } else {
+      // AI 模式
+      bx = b.x;
+      by = b.y;
+      currentScale = getBulletScale(by);
+    }
+
+    // 4. 繪製子彈
+    ctx.beginPath();
+    ctx.fillStyle = "orange";
+    // 子彈大小隨透視點距離變化：越近(by越大)則半徑越大
+    let bRadius = (basePlayerW / 8) * currentScale;
+    ctx.arc(bx, by, bRadius, 0, Math.PI * 2);
+    ctx.fill();
     
-    let bL = getPerspectiveX(bulletY, 0);
-    let bR = getPerspectiveX(bulletY, canvas.width);
-    
-    bx = bL + (1 - b.xRatio) * (bR - bL);
-    by = bulletY;
-  } else {
-    bx = b.x;
-    by = b.y;
-  }
-  ctx.beginPath();
-  // 使用反轉後的 by 來計算正確的透視縮放大小
-  ctx.arc(bx, by, (basePlayerW / 8) * getBulletScale(by), 0, Math.PI * 2);
-  ctx.fill();
-});
+    // 加上發光效果讓透視感更強
+    //ctx.strokeStyle = "white";
+    //ctx.lineWidth = 2 * currentScale;
+    //ctx.stroke();
+  });
 
   ctx.fillStyle = "yellow";
   bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill(); });
