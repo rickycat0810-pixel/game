@@ -272,12 +272,13 @@ let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[op
 activeEBullets.forEach(b => {
   let bx, by;
   if (opponentId) {
+    let visualProgress = Math.pow(b.progress, 1.5); // 調整此係數可改變加速感
     let mirrorXRatio = 1 - b.xRatio;
     let startX = getPerspectiveX(curE.y, canvas.width * mirrorXRatio);
     let endX = getPerspectiveX(bottomBoundaryY, canvas.width * mirrorXRatio);
     
-    bx = (1 - b.progress) * startX + b.progress * endX;
-    by = (1 - b.progress) * curE.y + b.progress * bottomBoundaryY;
+    bx = (1 - visualProgress) * startX + visualProgress * endX;
+    by = (1 - visualProgress) * curE.y + visualProgress * bottomBoundaryY;
 
     // --- 保留並修正 hitRange 邏輯 ---
     // 根據子彈當前的 Y 座標計算應有的判定寬度
@@ -415,28 +416,33 @@ function draw() {
 activeEBullets.forEach(b => {
   let bx, by, currentScale;
   if (opponentId && otherPlayers[opponentId]) {
+    // 1. 取得與 update() 完全一致的非線性進度 (解決遠慢近快問題)
+    let visualProgress = Math.pow(b.progress, 1.5); 
+    
+    // 2. 計算 X 軸鏡像與 X/Y 座標
     let mirrorXRatio = 1 - b.xRatio;
     let startX = getPerspectiveX(eY, canvas.width * mirrorXRatio);
     let endX = getPerspectiveX(bottomBoundaryY, canvas.width * mirrorXRatio);
     
-    bx = (1 - b.progress) * startX + b.progress * endX;
-    by = (1 - b.progress) * (eY - eH/2) + b.progress * bottomBoundaryY;
+    bx = (1 - visualProgress) * startX + visualProgress * endX;
+    // 使用 eY 作為基準，確保與 update 的判定點完全吻合
+    by = (1 - visualProgress) * eY + visualProgress * bottomBoundaryY;
     
-    // 保留：計算當前深度的縮放比例
     currentScale = getBulletScale(by); 
   } else {
+    // AI 模式
     bx = b.x; by = b.y;
     currentScale = getBulletScale(by);
   }
 
-  // 使用保留的 currentScale 繪製子彈
+  // 3. 繪製子彈影像
   ctx.beginPath();
   ctx.fillStyle = "orange";
-  let bRadius = (basePlayerW / 8) * currentScale; // 比例縮放
+  let bRadius = (basePlayerW / 8) * currentScale;
   ctx.arc(bx, by, Math.max(bRadius, 3), 0, Math.PI * 2);
   ctx.fill();
   
-  // 外光暈特效
+  // 外光暈
   ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
   ctx.lineWidth = 2 * currentScale;
   ctx.stroke();
