@@ -218,24 +218,21 @@ function update() {
   bullets = bullets.filter(b => b.progress < 1);
 
   let curE = { x: 0, y: 0, w: 0, isPVP: false };
+  
+//================================================================  
   if (opponentId && otherPlayers[opponentId]) {
     let op = otherPlayers[opponentId];
-
-    // 1. 取得對手在對面畫面的比例 (0~1)
-    // 由於 op.x 現在是比例，直接使用
+	curE.y = vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y);
     let ratio = op.x; 
-
-    // 2. 計算本地端遠方的有效邊界 (敵人移動的範圍限制)
-    // 這裡計算在 y 軸位置時，畫面最左與最右的透視 X 座標
-    let eLeftLimit = getPerspectiveX(op.y, 0); 
-    let eRightLimit = getPerspectiveX(op.y, canvas.width);
+    let eLeftLimit = getPerspectiveX(curE.y, 0);
+    let eRightLimit = getPerspectiveX(curE.y, canvas.width);
     let moveRange = eRightLimit - eLeftLimit;
-
-    // 3. 根據比例還原位置，並進行鏡像反轉 (1 - ratio)
-    // 這樣當對手在他畫面左邊時，在你畫面會是在右邊
+    
+	// 鏡像還原 X 位置
     curE.x = eLeftLimit + (1 - ratio) * moveRange; 
-    curE.y = op.y;
-    curE.w = basePlayerW * getEnemyScale(op.y).scale;
+	
+	// 根據該 Y 深度計算縮放比例
+    curE.w = basePlayerW * getEnemyScale(curE.y).scale;
     curE.isPVP = true;
 
     enemyHP = op.hp; 
@@ -266,13 +263,16 @@ function update() {
   });
 
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
+  
   activeEBullets.forEach(b => {
   let bx, by;	
   if(opponentId) {
+    // 使用對手子彈的橫向比例
+    let bLeftX = getPerspectiveX(b.yRatio * (bottomBoundaryY - vanishPoint.y) + vanishPoint.y, 0);
 	let bL = getPerspectiveX(b.y, 0);
 	let bR = getPerspectiveX(b.y, canvas.width);
 	bx = bL + (1 - b.xRatio) * (bR - bL);
-	by = (1 - b.progress) * vanishPoint.y + b.progress * bottomBoundaryY;
+	by = currentY; // 統一使用還原後的 Y
 	} else { bx = b.x; by = b.y; }
 	
     if(Math.sqrt((bx-player.x)**2 + (by-player.y)**2) < basePlayerW/2) {
@@ -285,8 +285,6 @@ function update() {
     setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000); // 延時返回大廳
   }
 
-  // 在 update() 函式末尾
-  // 將原本的 player.x 改為比例：player.x / canvas.width
   userRef.update({ 
     x: player.x / canvas.width, 
     y: player.y, 
@@ -294,7 +292,7 @@ function update() {
     bullets: bullets.map(b => ({
       // 子彈的 X 也需要轉為比例上傳，才能確保鏡像正確
       xRatio: b.x / canvas.width,
-      y: b.y,
+      yRatio: (b.y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y),
       progress: b.progress
     }))
   });
@@ -343,10 +341,13 @@ function draw() {
   if(opponentId && otherPlayers[opponentId]) {
     let op = otherPlayers[opponentId];
 	let ratio = op.x;
-	let eL = getPerspectiveX(op.y, 0);
-	let eR = getPerspectiveX(op.y, canvas.width);
+	// --- 關鍵修正：使用與本地敵人一致的 Y 座標 ---
+    eY = vanishPoint.y + (1/5) * RICO_MATH.ViewDeep;
+	// 根據這個 eY 重新計算透視下的 X 邊界
+    let eL = getPerspectiveX(eY, 0);
+    let eR = getPerspectiveX(eY, canvas.width);
 	eX = eL + (1 - ratio) * (eR - eL); 
-	eY = op.y; eHP = op.hp; 
+	eHP = op.hp;
 	eLabel = "連線對手"; eColor = "cyan";
   } else {
     eX = enemy.x; eY = enemy.y; eHP = enemyHP; eLabel = "AI 敵人"; eColor = "white";
@@ -387,10 +388,13 @@ function draw() {
   let bx, by;
   if(opponentId) {
     // 同樣使用透視比例公式轉換子彈 X 座標
-    let bLeftX = getPerspectiveX(b.y, 0);
-    let bRightX = getPerspectiveX(b.y, canvas.width);
-    bx = bLeftX + (1 - b.xRatio) * (bRightX - bLeftX);
-	by = (1 - b.progress) * vanishPoint.y + b.progress * bottomBoundaryY;
+	
+    let currentY = vanishPoint.y + (b.yRatio * RICO_MATH.ViewDeep); 
+    let bL = getPerspectiveX(currentY, 0);
+    let bR = getPerspectiveX(currentY, canvas.width);
+        
+    bx = bL + (1 - b.xRatio) * (bR - bL);
+    by = currentY;
   } else {
     bx = b.x;
 	by = b.y;
