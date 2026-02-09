@@ -2,73 +2,80 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>透視射擊遊戲（雙人同步配對修正版）</title>
+  <title>透視射擊遊戲（雙人同步配對細節完整版）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      touch-action: none;
-      background: black;
-      height: 100%;
+    html, body { margin: 0; padding: 0; overflow: hidden; touch-action: none; background: black; height: 100%; }
+    canvas { display: block; margin: auto; background: black; touch-action: none; }
+    
+    /* 大廳 UI 樣式 */
+    #lobbyUI {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: rgba(20, 20, 20, 0.95); padding: 25px; border-radius: 15px;
+      color: white; text-align: center; min-width: 280px; z-index: 100;
+      border: 1px solid #444; font-family: Arial, sans-serif;
     }
-    canvas { 
-      display: block; 
-      margin: auto; 
-      background: black; 
-      touch-action: none;
+    #playerList { margin: 15px 0; max-height: 250px; overflow-y: auto; background: #111; border: 1px solid #333; }
+    .player-item { padding: 10px; border-bottom: 1px solid #222; cursor: pointer; font-size: 14px; }
+    #playAIBtn { width: 100%; padding: 10px; font-size: 18px; background: #444; color: white; border: none; cursor: pointer; }
+    
+    #toggleGridBtn {
+      position: absolute; bottom: 10px; left: 10px; padding: 10px 20px;
+      font-size: 14px; background: rgba(68, 68, 68, 0.5); color: white;
+      border: none; cursor: pointer; display: none; z-index: 101;
     }
-    #restartBtn, #toggleGridBtn {
-      display: block;
-      margin: 10px auto;
-      padding: 10px 20px;
-      font-size: 18px;
-      background: #444;
-      color: white;
-      border: none;
-      cursor: pointer;
-    }
-    #toggleGridBtn { display: none; }
   </style>
 </head>
 <body>
 <canvas id="gameCanvas"></canvas>
-<button id="restartBtn">開始遊戲</button>
+
+<div id="lobbyUI">
+  <h2 id="lobbyStatus">遊戲大廳</h2>
+  <div id="playerList"></div>
+  <button id="playAIBtn">開始 AI 對戰</button>
+</div>
+
 <button id="toggleGridBtn">顯示格線</button>
 
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
+// --- Firebase 配置 ---
 const firebaseConfig = {
   apiKey: "AIzaSyDsQKp4MbIZiI_K95S8vy4q_q9pfx1c3aw",
   authDomain: "my-shooting-game-68732.firebaseapp.com",
-  databaseURL: "https://my-shooting-game-68732-default-rtdb.asia-southeast1.firebasedatabase.app", // ← 手動補上
+  databaseURL: "https://my-shooting-game-68732-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "my-shooting-game-68732",
-  storageBucket: "my-shooting-game-68732.appspot.com", // ← 修正拼寫
+  storageBucket: "my-shooting-game-68732.appspot.com",
   messagingSenderId: "212506441565",
   appId: "1:212506441565:web:8fe492bef5abd7be711ab4"
 };
 
 const app = firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
-
 const playerId = Math.random().toString(36).substr(2,9);
+const userRef = db.ref("users/" + playerId);
+userRef.set({ online: true, hp: 5, opponentId: null, request: null });
+userRef.onDisconnect().remove();
 
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
-const restartBtn = document.getElementById("restartBtn");
 const toggleGridBtn = document.getElementById("toggleGridBtn");
+const lobbyUI = document.getElementById("lobbyUI");
+const playerListDiv = document.getElementById("playerList");
+const playAIBtn = document.getElementById("playAIBtn");
 
+// --- 原始變數與常數 (100% 還原) ---
 let facingRight= 1;
 let basePlayerW, basePlayerH;
-let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP, enemyHP, gameOver;
+let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP, enemyHP, gameOver = true;
 let lastPlayerShot = 0, lastEnemyShot = 0, lastEnemyDodge = 0;
 const shotCooldown = 500, dodgeCooldown = 200, maxHP = 5;
 
 let otherPlayers = {};
-let otherBullets = {};
 let opponentId = null;
+let pendingInviteId = null;
+let inviteTimer = null;
 
 const RICO_MATH = {
   get ViewDeep() { 
@@ -148,11 +155,9 @@ function initGame(){
   playerHP = maxHP; enemyHP = maxHP;
   gameOver = false;
   toggleGridBtn.style.display = "block";
-  restartBtn.style.display = "none";
   lastPlayerShot = 0; lastEnemyShot = 0; lastEnemyDodge = 0;
   resizeCanvas();
-  db.ref("players/" + playerId).set({ x: player.x, y: player.y, hp: playerHP });
-  db.ref("bullets/" + playerId).set([]);
+  userRef.set({ x: player.x, y: player.y, hp: playerHP, bullets: [], opponentId: opponentId });
 }
 
 const playerMaxSpeed = () => canvas.width/5 / 60;
@@ -170,10 +175,9 @@ function shootBullet() {
   const bullet = { startX: player.x, startY: player.y - basePlayerH*0.5, x: player.x, y: player.y - basePlayerH*0.5, progress: 0 };
   bullets.push(bullet);
   shootSound.currentTime = 0; shootSound.play();
-  db.ref("bullets/" + playerId).set(bullets);
+  userRef.child("bullets").set(bullets);
 }
 
-// AI 邏輯
 setInterval(() => {
   if(gameOver || !enemy || opponentId) return; 
   let now = Date.now();
@@ -213,16 +217,13 @@ function update() {
   bullets.forEach(b => { b.progress += getPlayerBulletSpeed(b.y, b.startX, b.startY); b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x; b.y = (1-b.progress)*b.startY + b.progress*vanishPoint.y; });
   bullets = bullets.filter(b => b.progress < 1);
 
-  // 實作：有對手就即時接手本地敵人
   let curE = { x: 0, y: 0, w: 0, isPVP: false };
   if(opponentId && otherPlayers[opponentId]) {
     let op = otherPlayers[opponentId];
-    // PvP 模式：同步對手位置與血量
     curE = { x: canvas.width - op.x, y: op.y, w: basePlayerW * getEnemyScale(op.y).scale, isPVP: true };
     enemyHP = op.hp; 
-    enemyBullets = []; // 清空 AI 子彈
+    enemyBullets = [];
   } else {
-    // AI 模式
     let enemyCalc = getEnemyScale(enemy.y); enemy.scale = enemyCalc.scale;
     let enemyW = basePlayerW * enemy.scale;
     let enemySpeed = playerMaxSpeed() * (enemyCalc.width / (getPerspectiveX(bottomBoundaryY, canvas.width) - getPerspectiveX(bottomBoundaryY, 0)));
@@ -242,12 +243,12 @@ function update() {
 
   bullets.forEach(b => {
     if(Math.sqrt((b.x-curE.x)**2 + (b.y-curE.y)**2) < curE.w/2) {
-      if(!curE.isPVP) enemyHP--; // AI 模式下才本地扣血
+      if(!curE.isPVP) enemyHP--; 
       b.progress = 1; hitSound.currentTime = 0; hitSound.play();
     }
   });
 
-  let activeEBullets = opponentId ? (otherBullets[opponentId] || []) : enemyBullets;
+  let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   activeEBullets.forEach(b => {
     let bx = opponentId ? (canvas.width - b.x) : b.x;
     if(Math.sqrt((bx-player.x)**2 + (b.y-player.y)**2) < basePlayerW/2) {
@@ -255,13 +256,12 @@ function update() {
     }
   });
 
-  if(playerHP <= 0 || (opponentId && enemyHP <= 0) || (!opponentId && enemyHP <= 0)){ 
-    gameOver = true; restartBtn.textContent = "重新開始"; restartBtn.style.display = "block"; bgm.pause();
-    if(playerHP <= 0) failSound.play(); else winSound.play();
+  if(playerHP <= 0 || (opponentId && enemyHP <= 0) || (!opponentId && enemyHP <= 0)){
+    gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
+    setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000); // 延時返回大廳
   }
 
-  db.ref("players/" + playerId).update({ x: player.x, y: player.y, hp: playerHP });
-  db.ref("bullets/" + playerId).set(bullets);
+  userRef.update({ x: player.x, y: player.y, hp: playerHP, bullets: bullets });
 }
 
 function drawHPAbove(x, y, hp, maxHP, charWidth, charHeight, isEnemy=false){
@@ -317,7 +317,7 @@ function draw() {
   drawHPAbove(eX, eY, eHP, maxHP, eW, eH, true);
 
   ctx.fillStyle = "orange";
-  let activeEBullets = opponentId ? (otherBullets[opponentId] || []) : enemyBullets;
+  let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   activeEBullets.forEach(b => {
     let bx = opponentId ? (canvas.width - b.x) : b.x;
     ctx.beginPath(); ctx.arc(bx, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill();
@@ -334,39 +334,42 @@ function draw() {
 
 function gameLoop() { update(); draw(); if(!gameOver) requestAnimationFrame(gameLoop); }
 
-restartBtn.addEventListener("click", () => { initGame(); bgm.play(); gameLoop(); });
-
-// 實作：移除遊戲結束判定，隨時配對
-db.ref("players").on("value", snapshot => { 
-    otherPlayers = snapshot.val() || {}; 
-    const sortedIds = Object.keys(otherPlayers).sort();
-    const myIndex = sortedIds.indexOf(playerId);
-    
-    if (myIndex !== -1) {
-        const pairIndex = (myIndex % 2 === 0) ? myIndex + 1 : myIndex - 1;
-        opponentId = sortedIds[pairIndex] || null;
-    } else {
-        opponentId = null;
+// --- 大廳與邀請邏輯 ---
+db.ref("users").on("value", snapshot => {
+  otherPlayers = snapshot.val() || {};
+  const me = otherPlayers[playerId];
+  playerListDiv.innerHTML = "";
+  Object.keys(otherPlayers).forEach(id => {
+    const p = otherPlayers[id];
+    if (id === playerId) return;
+    const item = document.createElement("div");
+    item.className = "player-item";
+    item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
+    if (!p.opponentId) {
+      item.onclick = () => {
+        pendingInviteId = id;
+        db.ref(`users/${id}/request`).set({ from: playerId });
+        if(inviteTimer) clearTimeout(inviteTimer);
+        inviteTimer = setTimeout(() => { if(pendingInviteId === id) { alert("邀請逾時"); db.ref(`users/${id}/request`).remove(); pendingInviteId = null; } }, 15000);
+      };
     }
-
-    // 即時更新按鈕提示
-    if (opponentId) {
-        restartBtn.textContent = "對手已就緒";
-        restartBtn.style.background = "#28a745"; 
-    } else {
-        restartBtn.textContent = "等待對手中...";
-        restartBtn.style.background = "#444";
-    }
+    playerListDiv.appendChild(item);
+  });
+  if (me?.request && gameOver) {
+    if (confirm("來自 " + me.request.from + " 的挑戰？")) {
+      opponentId = me.request.from;
+      userRef.update({ request: null, opponentId: opponentId });
+      db.ref(`users/${opponentId}`).update({ opponentId: playerId });
+      lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+    } else { userRef.update({ request: null }); }
+  }
+  if (pendingInviteId && me?.opponentId === pendingInviteId) {
+    opponentId = pendingInviteId; pendingInviteId = null;
+    lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+  }
 });
 
-db.ref("bullets").on("value", snapshot => { 
-    otherBullets = snapshot.val() || {}; 
-});
-
-window.addEventListener("beforeunload", () => {
-    db.ref("players/" + playerId).remove();
-    db.ref("bullets/" + playerId).remove();
-});
+playAIBtn.onclick = () => { opponentId = null; lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop(); };
 
 resizeCanvas(); 
 draw(); 
