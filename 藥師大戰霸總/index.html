@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>透視射擊遊戲（細節完整重構版）</title>
+  <title>透視射擊遊戲（邏輯重構完整版）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <style>
     html, body { margin: 0; padding: 0; overflow: hidden; touch-action: none; background: black; height: 100%; }
@@ -65,8 +65,8 @@ const lobbyUI = document.getElementById("lobbyUI");
 const playerListDiv = document.getElementById("playerList");
 const playAIBtn = document.getElementById("playAIBtn");
 
-// --- 原始變數保留 ---
-let facingRight= 1;
+// --- 變數定義 ---
+let facingRight = 1;
 let basePlayerW, basePlayerH;
 let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP, enemyHP, gameOver = true;
 let lastPlayerShot = 0, lastEnemyShot = 0, lastEnemyDodge = 0;
@@ -74,7 +74,6 @@ const shotCooldown = 500, dodgeCooldown = 200, maxHP = 5;
 let otherPlayers = {};
 let opponentId = null;
 let pendingInviteId = null;
-let inviteTimer = null;
 let showGrid = false;
 const gridLines = [];
 
@@ -89,131 +88,151 @@ const hitSound = new Audio("被擊中.mp3");
 const winSound = new Audio("win.mp3");
 const failSound = new Audio("fail.mp3");
 
-// --- 優化重構：RICO_MATH 物件 ---
+// --- RICO_MATH：數學計算重構 ---
 const RICO_MATH = {
   get ViewDeep() { 
     let RICO_BUF = bottomBoundaryY - vanishPoint.y; 
     return (RICO_BUF < 1) ? 1 : RICO_BUF; 
   },
   getVisualProgress: (p) => Math.pow(p, 1.5),
+  // 核心轉換：將 0~1 的比例轉為實際 Canvas X
   getCanvasXByRatio: (ratio, y, isMirror = false) => {
     const finalRatio = isMirror ? (1 - ratio) : ratio;
     const leftX = getPerspectiveX(y, 0);
     const rightX = getPerspectiveX(y, canvas.width);
     return leftX + finalRatio * (rightX - leftX);
   },
-  getBulletData: (b, isPVP, enemyY) => {
+  // 獲取特定 Y 的縮放數據
+  getScaleAtY: (y) => {
+    const currentRange = getPerspectiveX(y, canvas.width) - getPerspectiveX(y, 0);
+    const baseRange = getPerspectiveX(bottomBoundaryY, canvas.width) - getPerspectiveX(bottomBoundaryY, 0);
+    return { scale: (currentRange / baseRange), width: currentRange };
+  },
+  // 統一處理子彈狀態 (包含 PVP 映射)
+  getBulletData: (b, isEnemy, isPVP, enemyY) => {
     let bx, by;
-    if (isPVP) {
+    if (isPVP && isEnemy) {
       const vp = RICO_MATH.getVisualProgress(b.progress);
       bx = RICO_MATH.getCanvasXByRatio(b.xRatio, (1 - vp) * enemyY + vp * bottomBoundaryY, true);
       by = (1 - vp) * enemyY + vp * bottomBoundaryY;
     } else {
       bx = b.x; by = b.y;
     }
-    const scale = getBulletScale(by);
-    return { x: bx, y: by, scale: scale, radius: Math.max((basePlayerW / 8) * scale, 3) };
+    const s = RICO_MATH.getScaleAtY(by).scale;
+    return { x: bx, y: by, scale: s, radius: Math.max((basePlayerW / 8) * s, 3) };
   }
 };
 
-// --- 優化重構：輔助邏輯 ---
+// 輔助函式
 function getPerspectiveX(y, baseX){ return vanishPoint.x + (baseX - vanishPoint.x) * ((y - vanishPoint.y) / RICO_MATH.ViewDeep); }
-function getEnemyScale(y) {
-  let eLeftX = getPerspectiveX(y, 0); let eRightX = getPerspectiveX(y, canvas.width);
-  let enemyWidth = eRightX - eLeftX;
-  let pLeftX = getPerspectiveX(bottomBoundaryY, 0); let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
-  let playerWidth = pRightX - pLeftX;
-  return { scale: (enemyWidth / playerWidth), width: enemyWidth };
-}
-function getBulletScale(y) {
-  let bLeftX = getPerspectiveX(y, 0); let bRightX = getPerspectiveX(y, canvas.width);
-  let pLeftX = getPerspectiveX(bottomBoundaryY, 0); let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
-  return (bRightX - bLeftX) / (pRightX - pLeftX);
-}
 
-function getCurrentEnemyState() {
-  let state = { x: 0, y: 0, w: 0, h: 0, hp: 0, label: "", color: "", isPVP: false, facing: 1 };
-  state.y = vanishPoint.y + (1/5) * RICO_MATH.ViewDeep; // 固定敵人的 Y 深度
+// --- 狀態獲取：整合 update 與 draw 共用數據 ---
+function getCurrentGameState() {
+  const state = {
+    player: { x: player?.x, y: player?.y, w: basePlayerW, h: basePlayerH, hp: playerHP, facing: targetX > player?.x ? -1 : 1 },
+    enemy: { x: 0, y: 0, w: 0, h: 0, hp: 0, label: "", color: "", isPVP: false, facing: 1, bullets: [] }
+  };
+
+  const enemyY = vanishPoint.y + (1/5) * RICO_MATH.ViewDeep;
+  const eScale = RICO_MATH.getScaleAtY(enemyY);
+
   if (opponentId && otherPlayers[opponentId]) {
     const op = otherPlayers[opponentId];
-    state.isPVP = true; state.hp = op.hp; state.label = "連線對手"; state.color = "cyan";
-    state.x = RICO_MATH.getCanvasXByRatio(op.x, state.y, true);
-    state.facing = op.x > 0.5 ? 1 : -1;
-  } else {
-    state.isPVP = false; state.hp = enemyHP; state.label = "AI 敵人"; state.color = "white";
-    state.x = enemy.x; state.y = enemy.y; state.facing = enemy.dir === 1 ? -1 : 1;
+    state.enemy = {
+      isPVP: true,
+      x: RICO_MATH.getCanvasXByRatio(op.x, enemyY, true),
+      y: enemyY,
+      w: basePlayerW * eScale.scale,
+      h: basePlayerH * eScale.scale,
+      hp: op.hp,
+      label: "連線對手",
+      color: "cyan",
+      facing: op.x > 0.5 ? 1 : -1,
+      bullets: op.bullets || []
+    };
+  } else if (enemy) {
+    state.enemy = {
+      isPVP: false,
+      x: enemy.x,
+      y: enemy.y,
+      w: basePlayerW * eScale.scale,
+      h: basePlayerH * eScale.scale,
+      hp: enemyHP,
+      label: "AI 敵人",
+      color: "white",
+      facing: enemy.dir === 1 ? -1 : 1,
+      bullets: enemyBullets
+    };
   }
-  const s = getEnemyScale(state.y).scale;
-  state.w = basePlayerW * s; state.h = basePlayerH * s;
   return state;
 }
 
-// --- 原始細節還原：Canvas 與 Grid ---
+// --- 初始化與 Canvas 管理 ---
 function initGrid(){
   gridLines.length = 0;
-  for(let i=0;i<30;i++){ let x = (canvas.width/30)*i; gridLines.push({x}); }
+  for(let i=0; i<30; i++){ gridLines.push({ x: (canvas.width/30)*i }); }
 }
 
 function resizeCanvas() {
-  let oldW = canvas.width; let oldH = canvas.height;
+  let oldW = canvas.width, oldH = canvas.height;
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight * 0.9;
   let NewSizeWScale = canvas.width / oldW;
   let NewSizeHScale = canvas.height / oldH;
-  basePlayerW = canvas.width /9;
+  basePlayerW = canvas.width / 9;
   basePlayerH = basePlayerW * (50/35);
   vanishPoint = { x: canvas.width/2, y: canvas.height*(31/48) };
   bottomBoundaryY = canvas.height;
   initGrid();
-  // 保留縮放補償邏輯
   if(player){ player.x *= NewSizeWScale; player.y *= NewSizeHScale; }
-  if(enemy){ 
-    enemy.x *= NewSizeWScale; enemy.y *= NewSizeHScale; 
-  }
-  if(bullets) bullets.forEach(b => { b.startX *= NewSizeWScale; b.startY *= NewSizeHScale; b.x *= NewSizeWScale; b.y *= NewSizeHScale; }); 
+  if(enemy){ enemy.x *= NewSizeWScale; enemy.y *= NewSizeHScale; }
+  if(bullets) bullets.forEach(b => { b.startX *= NewSizeWScale; b.startY *= NewSizeHScale; b.x *= NewSizeWScale; b.y *= NewSizeHScale; });
   if(enemyBullets) enemyBullets.forEach(b => { b.startX *= NewSizeWScale; b.startY *= NewSizeHScale; b.x *= NewSizeWScale; b.y *= NewSizeHScale; });
 }
 
-// --- 遊戲邏輯循環 ---
+// --- 遊戲邏輯 ---
 function update() {
   if(gameOver || !player) return;
+  const game = getCurrentGameState();
 
   // 1. 玩家移動
   let pLeftLimit = getPerspectiveX(player.y, 0) + basePlayerW/2;
   let pRightLimit = getPerspectiveX(player.y, canvas.width) - basePlayerW/2;
   let dx = targetX - player.x, mSpeed = canvas.width/5 / 60;
   if(Math.abs(dx) > mSpeed) dx = mSpeed * Math.sign(dx);
-  player.x += dx;
-  player.x = Math.max(pLeftLimit, Math.min(player.x, pRightLimit));
+  player.x = Math.max(pLeftLimit, Math.min(player.x + dx, pRightLimit));
 
-  // 2. 玩家子彈前進
+  // 2. 玩家子彈更新
   bullets.forEach(b => {
     let speed = 0.02 * ((b.y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y)) * (1 + Math.abs((b.startX - vanishPoint.x) / (b.startY - vanishPoint.y))) + 0.001;
-    b.progress += speed; b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x; b.y = (1-b.progress)*b.startY + b.progress*vanishPoint.y;
+    b.progress += speed; 
+    b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x; 
+    b.y = (1-b.progress)*b.startY + b.progress*vanishPoint.y;
   });
   bullets = bullets.filter(b => b.progress < 1);
 
-  // 3. 獲取對手數據與處理碰撞
-  const curE = getCurrentEnemyState();
-  if(!curE.isPVP) updateAI(curE.w);
+  // 3. 碰撞檢查
+  if(!game.enemy.isPVP) updateAI(game.enemy.w);
 
+  // 我方射擊對手
   bullets.forEach(b => {
-    if(Math.sqrt((b.x-curE.x)**2 + (b.y-curE.y)**2) < curE.w/2) {
-      if(!curE.isPVP) enemyHP--; 
+    if(Math.sqrt((b.x - game.enemy.x)**2 + (b.y - game.enemy.y)**2) < game.enemy.w/2) {
+      if(!game.enemy.isPVP) enemyHP--; 
       b.progress = 1; hitSound.currentTime = 0; hitSound.play();
     }
   });
 
-  const activeEBullets = curE.isPVP ? (otherPlayers[opponentId]?.bullets || []) : enemyBullets;
-  activeEBullets.forEach(b => {
-    const bData = RICO_MATH.getBulletData(b, curE.isPVP, curE.y);
-    const hitRange = curE.isPVP ? Math.max(bData.radius, 20) : basePlayerW / 2;
+  // 對手射擊我方
+  game.enemy.bullets.forEach(b => {
+    const bData = RICO_MATH.getBulletData(b, true, game.enemy.isPVP, game.enemy.y);
+    const hitRange = game.enemy.isPVP ? Math.max(bData.radius, 20) : basePlayerW / 2;
     if (Math.sqrt((bData.x - player.x) ** 2 + (bData.y - player.y) ** 2) < hitRange) {
       playerHP--; b.progress = 1.1; hitSound.currentTime = 0; hitSound.play();
     }
   });
 
-  if(playerHP <= 0 || enemyHP <= 0){
+  // 4. 結束判定
+  if(playerHP <= 0 || (game.enemy.hp <= 0 && !game.enemy.isPVP) || (game.enemy.isPVP && game.enemy.hp <= 0)){
     gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
     setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000);
   }
@@ -221,11 +240,11 @@ function update() {
 }
 
 function updateAI(enemyW) {
-  const now = Date.now(), enemyCalc = getEnemyScale(enemy.y);
+  const now = Date.now(), eScale = RICO_MATH.getScaleAtY(enemy.y);
   const danger = bullets.some(b => Math.abs(b.x - enemy.x) < 30 && b.y < enemy.y);
   if(danger && now - lastEnemyDodge > dodgeCooldown){ enemy.dir *= -1; lastEnemyDodge = now; }
   
-  let enemySpeed = (canvas.width/5 / 60) * (enemyCalc.width / (getPerspectiveX(bottomBoundaryY, canvas.width) - getPerspectiveX(bottomBoundaryY, 0)));
+  let enemySpeed = (canvas.width/5 / 60) * (eScale.width / (getPerspectiveX(bottomBoundaryY, canvas.width) - getPerspectiveX(bottomBoundaryY, 0)));
   enemy.x += enemy.dir * enemySpeed;
   if(enemy.x - enemyW/2 <= getPerspectiveX(enemy.y, 0)){ enemy.x = getPerspectiveX(enemy.y, 0) + enemyW/2; enemy.dir = 1; }
   if(enemy.x + enemyW/2 >= getPerspectiveX(enemy.y, canvas.width)){ enemy.x = getPerspectiveX(enemy.y, canvas.width) - enemyW/2; enemy.dir = -1; }
@@ -246,12 +265,12 @@ function updateAI(enemyW) {
   enemyBullets = enemyBullets.filter(b => b.progress < 1);
 }
 
+// --- 繪製 ---
 function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  // 還原背景漸層細節
-  let gradient = ctx.createLinearGradient(0,0,0,canvas.height);
-  gradient.addColorStop(0,"skyblue"); gradient.addColorStop(1,"white");
-  ctx.fillStyle = gradient; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  let grad = ctx.createLinearGradient(0,0,0,canvas.height);
+  grad.addColorStop(0,"skyblue"); grad.addColorStop(1,"white");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
   if(showGrid){
@@ -261,45 +280,46 @@ function draw() {
   }
 
   if(!player) return;
+  const game = getCurrentGameState();
 
   if(gameOver){
     ctx.fillStyle = "yellow"; ctx.font = "40px Arial"; ctx.textAlign = "center";
     ctx.fillText(playerHP <= 0 ? "敵人勝利!" : "玩家勝利!", canvas.width/2, canvas.height/2);
     if(playerHP <= 0){ 
-      ctx.save(); let fDir = targetX > player.x ? -1 : 1;
-      ctx.scale(fDir, 1); ctx.drawImage(failImg, fDir*player.x - basePlayerW, player.y - basePlayerH/1.3, basePlayerW*1.7, basePlayerH/1.3); ctx.restore();
+      ctx.save(); let fDir = game.player.facing;
+      ctx.scale(fDir, 1); ctx.drawImage(failImg, fDir*game.player.x - basePlayerW, game.player.y - basePlayerH/1.3, basePlayerW*1.7, basePlayerH/1.3); ctx.restore();
     }
     return;
   }
 
-  const curE = getCurrentEnemyState();
-  // 繪製對手
-  ctx.save(); ctx.translate(curE.x, curE.y); ctx.scale(curE.facing, 1);
-  ctx.drawImage(enemyImg, -curE.w/2, -curE.h, curE.w, curE.h); ctx.restore();
-  ctx.fillStyle = curE.color; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
-  ctx.fillText(curE.label, curE.x, curE.y - curE.h - 25);
-  drawHPAbove(curE.x, curE.y, curE.hp, maxHP, curE.w, curE.h, true);
+  // 畫對手/AI
+  ctx.save(); ctx.translate(game.enemy.x, game.enemy.y); ctx.scale(game.enemy.facing, 1);
+  ctx.drawImage(enemyImg, -game.enemy.w/2, -game.enemy.h, game.enemy.w, game.enemy.h); ctx.restore();
+  ctx.fillStyle = game.enemy.color; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
+  ctx.fillText(game.enemy.label, game.enemy.x, game.enemy.y - game.enemy.h - 25);
+  drawHPAbove(game.enemy.x, game.enemy.y, game.enemy.hp, maxHP, game.enemy.w, game.enemy.h, true);
 
-  // 繪製子彈
-  const activeEBullets = curE.isPVP ? (otherPlayers[opponentId]?.bullets || []) : enemyBullets;
-  activeEBullets.forEach(b => {
-    const d = RICO_MATH.getBulletData(b, curE.isPVP, curE.y);
+  // 畫敵人子彈
+  game.enemy.bullets.forEach(b => {
+    const d = RICO_MATH.getBulletData(b, true, game.enemy.isPVP, game.enemy.y);
     ctx.beginPath(); ctx.fillStyle = "orange"; ctx.arc(d.x, d.y, d.radius, 0, Math.PI*2); ctx.fill();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 2 * d.scale; ctx.stroke();
   });
+
+  // 畫玩家子彈
   bullets.forEach(b => {
-    ctx.beginPath(); ctx.fillStyle = "yellow";
-    ctx.arc(b.x, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill();
+    const d = RICO_MATH.getBulletData(b, false, false, 0);
+    ctx.beginPath(); ctx.fillStyle = "yellow"; ctx.arc(d.x, d.y, d.radius, 0, Math.PI*2); ctx.fill();
   });
 
-  // 繪製玩家
-  ctx.save(); facingRight = targetX > player.x ? -1 : 1;
-  ctx.scale(facingRight, 1); ctx.drawImage(playerImg, facingRight*player.x - basePlayerW/2, player.y - basePlayerH, basePlayerW, basePlayerH);
+  // 畫玩家
+  ctx.save(); ctx.scale(game.player.facing, 1);
+  ctx.drawImage(playerImg, game.player.facing*game.player.x - basePlayerW/2, game.player.y - basePlayerH, basePlayerW, basePlayerH);
   ctx.restore();
-  drawHPAbove(player.x, player.y, playerHP, maxHP, basePlayerW, basePlayerH, false);
+  drawHPAbove(game.player.x, game.player.y, game.player.hp, maxHP, basePlayerW, basePlayerH, false);
 }
 
-// --- 其餘系統邏輯保留 ---
+// --- 輔助邏輯與事件 ---
 function syncToFirebase() {
   const now = Date.now();
   if (now - lastFirebaseUpdateTime < FIREBASE_TICK_RATE || !player || gameOver) return;
@@ -324,10 +344,10 @@ function initGame(){
   vanishPoint = { x: canvas.width/2, y: canvas.height*(31/48) }; 
   bottomBoundaryY = canvas.height;
   player = { x: canvas.width/2, y: bottomBoundaryY };
-  enemy = { x: vanishPoint.x, y: vanishPoint.y + (1/5) * RICO_MATH.ViewDeep, dir: 1 };
+  enemy = { x: vanishPoint.x, y: vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y), dir: 1 };
   bullets = []; enemyBullets = []; playerHP = maxHP; enemyHP = maxHP; gameOver = false;
   toggleGridBtn.style.display = "block"; resizeCanvas();
-  userRef.set({ x: player.x, y: player.y, hp: playerHP, bullets: [], opponentId: opponentId });
+  userRef.set({ x: player.x / canvas.width, hp: playerHP, bullets: [], opponentId: opponentId });
 }
 
 let targetX = 0;
@@ -351,7 +371,7 @@ playAIBtn.onclick = () => { opponentId = null; lobbyUI.style.display = "none"; i
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("orientationchange", resizeCanvas);
 
-// Firebase 監聽與大廳邏輯保留
+// Firebase 監聽
 db.ref("users").on("value", snapshot => {
   otherPlayers = snapshot.val() || {};
   const me = otherPlayers[playerId];
@@ -360,7 +380,7 @@ db.ref("users").on("value", snapshot => {
     if (id === playerId) return;
     const p = otherPlayers[id], item = document.createElement("div");
     item.className = "player-item"; item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
-    if (!p.opponentId) item.onclick = () => { pendingInviteId = id; db.ref(`users/${id}/request`).set({ from: playerId }); };
+    if (!p.opponentId) item.onclick = () => { db.ref(`users/${id}/request`).set({ from: playerId }); };
     playerListDiv.appendChild(item);
   });
   if (me?.request && gameOver) {
@@ -370,7 +390,9 @@ db.ref("users").on("value", snapshot => {
       lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
     } else { userRef.update({ request: null }); }
   }
-  if (pendingInviteId && me?.opponentId === pendingInviteId) { opponentId = pendingInviteId; pendingInviteId = null; lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop(); }
+  if (me?.opponentId && !opponentId && gameOver) {
+    opponentId = me.opponentId; lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+  }
 });
 
 resizeCanvas(); draw();
