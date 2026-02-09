@@ -265,20 +265,28 @@ function update() {
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   
   activeEBullets.forEach(b => {
-  let bx, by;	
-  if(opponentId) {
-    // 使用對手子彈的橫向比例
-    let bLeftX = getPerspectiveX(b.yRatio * (bottomBoundaryY - vanishPoint.y) + vanishPoint.y, 0);
-	let bL = getPerspectiveX(b.y, 0);
-	let bR = getPerspectiveX(b.y, canvas.width);
-	bx = bL + (1 - b.xRatio) * (bR - bL);
-	by = currentY; // 統一使用還原後的 Y
-	} else { bx = b.x; by = b.y; }
-	
-    if(Math.sqrt((bx-player.x)**2 + (by-player.y)**2) < basePlayerW/2) {
-      playerHP--; b.progress = 1; hitSound.currentTime = 0; hitSound.play();
-    }
-  });
+  let bx, by;
+  if (opponentId) {
+    // 1. 先還原這顆子彈在本地視角應有的 Y 座標
+    let curBulletY = vanishPoint.y + (b.yRatio * (bottomBoundaryY - vanishPoint.y));
+    // 2. 根據該 Y 座標取得左右邊界
+    let bL = getPerspectiveX(curBulletY, 0);
+    let bR = getPerspectiveX(curBulletY, canvas.width);
+    // 3. 鏡像計算 X 並賦予正確的 Y
+    bx = bL + (1 - b.xRatio) * (bR - bL);
+    by = curBulletY;
+  } else {
+    bx = b.x;
+    by = b.y;
+  }
+
+  // 4. 進行碰撞檢查
+  if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
+    playerHP--;
+    b.progress = 1; 
+    hitSound.currentTime = 0; hitSound.play();
+  }
+});
 
   if(playerHP <= 0 || (opponentId && enemyHP <= 0) || (!opponentId && enemyHP <= 0)){
     gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
@@ -386,20 +394,19 @@ function draw() {
   
   activeEBullets.forEach(b => {
   let bx, by;
-  if(opponentId) {
-    // 同樣使用透視比例公式轉換子彈 X 座標
-	
-    let currentY = vanishPoint.y + (b.yRatio * RICO_MATH.ViewDeep); 
-    let bL = getPerspectiveX(currentY, 0);
-    let bR = getPerspectiveX(currentY, canvas.width);
-        
+  if (opponentId) {
+    let bulletY = vanishPoint.y + (b.yRatio * RICO_MATH.ViewDeep);
+    let bL = getPerspectiveX(bulletY, 0);
+    let bR = getPerspectiveX(bulletY, canvas.width);
     bx = bL + (1 - b.xRatio) * (bR - bL);
-    by = currentY;
+    by = bulletY;
   } else {
     bx = b.x;
-	by = b.y;
+    by = b.y;
   }
-  ctx.beginPath(); ctx.arc(bx, by, (basePlayerW/8)*getBulletScale(by), 0, Math.PI*2); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(bx, by, (basePlayerW / 8) * getBulletScale(by), 0, Math.PI * 2);
+  ctx.fill();
 });
 
   ctx.fillStyle = "yellow";
