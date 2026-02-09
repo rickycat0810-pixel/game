@@ -262,40 +262,40 @@ function update() {
     }
   });
 
-  // --- 修正後的對手子彈處理邏輯 ---
-  let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
-  
-  activeEBullets.forEach(b => {
-    let bx, by;
-    if (opponentId) {
-      // 1. X軸擴散：使用鏡像比例計算底端落點
-      let mirrorXRatio = 1 - b.xRatio;
-      let targetXAtBottom = getPerspectiveX(bottomBoundaryY, mirrorXRatio * canvas.width);
-      
-      // 2. 位置插值：從對手頭像位置飛往玩家底端落點
-      // 此處 progress 由對手同步，會自動產生「遠慢近快」的透視速度感
-      bx = (1 - b.progress) * curE.x + b.progress * targetXAtBottom;
-      by = (1 - b.progress) * curE.y + b.progress * bottomBoundaryY;
+  // --- update() 函式內關於 PVP 子彈碰撞的邏輯修正 ---
+let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
 
-      // 3. 碰撞檢查
-      // 子彈判定大小也要隨透視縮放，避免遠處太容易被打中
-      let hitRange = (basePlayerW / 2) * getBulletScale(by);
-      if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < Math.max(hitRange, 15)) {
-        playerHP--;
-        b.progress = 1; // 標記擊中以過濾
-        hitSound.currentTime = 0; hitSound.play();
-      }
-    } else {
-      // AI 模式維持原本邏輯
-      bx = b.x;
-      by = b.y;
-      if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
-        playerHP--;
-        b.progress = 1;
-        hitSound.currentTime = 0; hitSound.play();
-      }
+activeEBullets.forEach(b => {
+  let bx, by;
+  if (opponentId) {
+    // 1. 取得對手的原始比例並鏡像
+    let mirrorXRatio = 1 - b.xRatio; 
+    
+    // 2. 計算子彈在玩家底部的預期落點 (擴散關鍵)
+    // 讓子彈根據與中心點的距離，按比例延伸到畫面上方或下方
+    let pLeftX = getPerspectiveX(bottomBoundaryY, 0);
+    let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
+    let targetXAtBottom = pLeftX + mirrorXRatio * (pRightX - pLeftX);
+    
+    // 3. 根據 progress 進行線性插值 (從遠處對手飛向近處玩家)
+    bx = (1 - b.progress) * curE.x + b.progress * targetXAtBottom;
+    by = (1 - b.progress) * curE.y + b.progress * bottomBoundaryY;
+
+    // 4. 碰撞檢查 (增加判定範圍以符合透視感)
+    let hitRange = (basePlayerW / 2) * getBulletScale(by);
+    if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < Math.max(hitRange, 20)) {
+      playerHP--;
+      b.progress = 1; // 標記擊中
+      hitSound.currentTime = 0; hitSound.play();
     }
-  });
+  } else {
+    // AI 模式維持原樣
+    bx = b.x; by = b.y;
+    if (Math.sqrt((bx - player.x) ** 2 + (by - player.y) ** 2) < basePlayerW / 2) {
+      playerHP--; b.progress = 1; hitSound.currentTime = 0; hitSound.play();
+    }
+  }
+});
 
   if(playerHP <= 0 || (opponentId && enemyHP <= 0) || (!opponentId && enemyHP <= 0)){
     gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
@@ -401,46 +401,41 @@ function draw() {
   ctx.fillStyle = "orange";
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
   
-  // --- 在 draw() 函式中尋找 activeEBullets.forEach 區塊 ---
-  activeEBullets.forEach(b => {
-    let bx, by;
-    // 取得當前子彈對應的縮放比例（用於改變子彈大小）
-    let currentScale = 1;
+  // --- draw() 函式內關於子彈繪製的邏輯修正 ---
+activeEBullets.forEach(b => {
+  let bx, by;
+  let currentScale = 1;
 
-    if (opponentId && otherPlayers[opponentId]) {
-      // 1. 取得鏡像 X 比例
-      let mirrorXRatio = 1 - b.xRatio;
-      let targetXAtBottom = getPerspectiveX(bottomBoundaryY, mirrorXRatio * canvas.width);
-      
-      // 2. 計算起始與結束的 Z 軸高度偏移 (讓子彈從胸口發出)
-      let startY = eY - (eH / 2); 
-      let endY = bottomBoundaryY - (basePlayerH / 2);
-
-      // 3. 執行線性插值
-      bx = (1 - b.progress) * eX + b.progress * targetXAtBottom;
-      by = (1 - b.progress) * startY + b.progress * endY;
-      
-      currentScale = getBulletScale(by);
-    } else {
-      // AI 模式
-      bx = b.x;
-      by = b.y;
-      currentScale = getBulletScale(by);
-    }
-
-    // 4. 繪製子彈
-    ctx.beginPath();
-    ctx.fillStyle = "orange";
-    // 子彈大小隨透視點距離變化：越近(by越大)則半徑越大
-    let bRadius = (basePlayerW / 8) * currentScale;
-    ctx.arc(bx, by, bRadius, 0, Math.PI * 2);
-    ctx.fill();
+  if (opponentId && otherPlayers[opponentId]) {
+    // 同步 update 的鏡像邏輯
+    let mirrorXRatio = 1 - b.xRatio;
+    let pLeftX = getPerspectiveX(bottomBoundaryY, 0);
+    let pRightX = getPerspectiveX(bottomBoundaryY, canvas.width);
+    let targetXAtBottom = pLeftX + mirrorXRatio * (pRightX - pLeftX);
     
-    // 加上發光效果讓透視感更強
-    //ctx.strokeStyle = "white";
-    //ctx.lineWidth = 2 * currentScale;
-    //ctx.stroke();
-  });
+    // 從對手胸口高度發射
+    let startY = eY - (eH / 2);
+    bx = (1 - b.progress) * eX + b.progress * targetXAtBottom;
+    by = (1 - b.progress) * startY + b.progress * bottomBoundaryY;
+    
+    currentScale = getBulletScale(by);
+  } else {
+    bx = b.x; by = b.y;
+    currentScale = getBulletScale(by);
+  }
+
+  // 繪製具備透視感的子彈
+  ctx.beginPath();
+  ctx.fillStyle = "orange";
+  let bRadius = (basePlayerW / 8) * currentScale;
+  ctx.arc(bx, by, Math.max(bRadius, 3), 0, Math.PI * 2);
+  ctx.fill();
+  
+  // 增加外光暈增強視覺
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+  ctx.lineWidth = 2 * currentScale;
+  ctx.stroke();
+});
 
   ctx.fillStyle = "yellow";
   bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill(); });
