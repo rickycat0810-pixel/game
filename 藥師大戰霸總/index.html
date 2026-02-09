@@ -218,9 +218,24 @@ function update() {
   bullets = bullets.filter(b => b.progress < 1);
 
   let curE = { x: 0, y: 0, w: 0, isPVP: false };
-  if(opponentId && otherPlayers[opponentId]) {
+  if (opponentId && otherPlayers[opponentId]) {
     let op = otherPlayers[opponentId];
-    curE = { x: canvas.width - op.x, y: op.y, w: basePlayerW * getEnemyScale(op.y).scale, isPVP: true };
+  
+    // 1. 計算對手在遠方的有效邊界 (考慮透視縮放後的活動寬度)
+    let eLeftX = getPerspectiveX(op.y, 0); 
+    let eRightX = getPerspectiveX(op.y, canvas.width);
+    let effectiveWidth = eRightX - eLeftX;
+
+    // 2. 將對手的 X 座標比例化，並進行左右鏡像反轉 (1 - ratio)
+    // op.x / canvas.width 取得對手在下方的百分比位置
+    let ratio = op.x / canvas.width;
+  
+    // 3. 套入計算系統：將比例映射回遠方的 X 座標
+    curE.x = eLeftX + (1 - ratio) * effectiveWidth; 
+    curE.y = op.y;
+    curE.w = basePlayerW * getEnemyScale(op.y).scale;
+    curE.isPVP = true;
+  
     enemyHP = op.hp; 
     enemyBullets = [];
   } else {
@@ -311,17 +326,46 @@ function draw() {
   }
 
   let eS = getEnemyScale(eY).scale; let eW = basePlayerW * eS; let eH = basePlayerH * eS;
-  ctx.drawImage(enemyImg, eX - eW/2, eY - eH, eW, eH);
+  ctx.save();
+  // 1. 決定對手的朝向
+  let opFacing = 1; 
+  if (opponentId && otherPlayers[opponentId]) {
+    // 取得對手的原始比例 (0~1)
+    let ratio = otherPlayers[opponentId].x / canvas.width;
+    // 如果比例小於 0.5 (在對手的左半邊)，我們讓貼圖翻轉，或是根據移動增量判斷
+    // 這裡簡單與玩家的 facingRight 邏輯對應，達成左右相反
+    opFacing = (ratio > 0.5) ? 1 : -1; 
+  } else {
+    // AI 模式則根據其 dir 變數
+    opFacing = enemy.dir === 1 ? -1 : 1; 
+  }
+
+  // 2. 移動畫布中心到敵人腳下並執行縮放
+  ctx.translate(eX, eY);
+  ctx.scale(opFacing, 1);
+
+  // 3. 繪製貼圖 (注意座標要改為中心對齊)
+  ctx.drawImage(enemyImg, -eW/2, -eH, eW, eH);
+  ctx.restore();
   ctx.fillStyle = eColor; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
   ctx.fillText(eLabel, eX, eY - eH - 25);
   drawHPAbove(eX, eY, eHP, maxHP, eW, eH, true);
 
   ctx.fillStyle = "orange";
   let activeEBullets = (opponentId && otherPlayers[opponentId]) ? (otherPlayers[opponentId].bullets || []) : enemyBullets;
+  
   activeEBullets.forEach(b => {
-    let bx = opponentId ? (canvas.width - b.x) : b.x;
-    ctx.beginPath(); ctx.arc(bx, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill();
-  });
+  let bx;
+  if(opponentId) {
+    // 同樣使用透視比例公式轉換子彈 X 座標
+    let bLeftX = getPerspectiveX(b.y, 0);
+    let bRightX = getPerspectiveX(b.y, canvas.width);
+    bx = bLeftX + (1 - (b.x / canvas.width)) * (bRightX - bLeftX);
+  } else {
+    bx = b.x;
+  }
+  ctx.beginPath(); ctx.arc(bx, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill();
+});
 
   ctx.fillStyle = "yellow";
   bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, (basePlayerW/8)*getBulletScale(b.y), 0, Math.PI*2); ctx.fill(); });
