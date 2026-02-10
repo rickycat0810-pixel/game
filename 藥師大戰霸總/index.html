@@ -480,38 +480,79 @@ window.addEventListener("orientationchange", resizeCanvas);
 
 // Firebase 監聽
 function startLobbyListen() {
+  // 1. 監聽整個大廳 (users 節點)
   db.ref("users").on("value", snapshot => {
     otherPlayers = snapshot.val() || {};
     const me = otherPlayers[playerId];
+    
+    // 更新大廳列表 UI
     playerListDiv.innerHTML = "";
     Object.keys(otherPlayers).forEach(id => {
       if (id === playerId) return;
       const p = otherPlayers[id], item = document.createElement("div");
-      item.className = "player-item"; item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
+      item.className = "player-item"; 
+      item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
       if (!p.opponentId) item.onclick = () => { db.ref(`users/${id}/request`).set({ from: playerId }); };
       playerListDiv.appendChild(item);
     });
+
+    // 處理：收到挑戰請求
     if (me?.request && gameOver) {
       if (confirm("來自 " + me.request.from + " 的挑戰？")) {
-        opponentId = me.request.from; userRef.update({ request: null, opponentId: opponentId });
+        opponentId = me.request.from;
+        userRef.update({ request: null, opponentId: opponentId });
         db.ref(`users/${opponentId}`).update({ opponentId: playerId });
-	  
-	    stopLobbyListen(); // 進入 PVP 前關閉監聽
-	  
-        lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
-      } else { userRef.update({ request: null }); }
+        enterPVPMode(); // 呼叫進入 PVP 的優化邏輯
+      } else { 
+        userRef.update({ request: null }); 
+      }
     }
+
+    // 處理：被挑戰者接受後，自動進入遊戲
     if (me?.opponentId && !opponentId && gameOver) {
       opponentId = me.opponentId; 
-	  stopLobbyListen(); // 被挑战進入遊戲前關閉監聽
-	  lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+      enterPVPMode(); // 呼叫進入 PVP 的優化邏輯
     }
   });
 }
 
+function enterPVPMode() {
+  // A. 停止大廳的全體監聽 (節省流量)
+  stopLobbyListen(); 
+
+  // B. 開啟「僅限對手」的精準監聽
+  db.ref(`users/${opponentId}`).on("value", (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+      // 更新 otherPlayers 中對手的資訊，供 draw() 和 update() 使用
+      otherPlayers[opponentId] = data;
+
+      // 檢查對手是否中途離開 (如果對方的 opponentId 變成 null 且遊戲尚未結束)
+      if (!data.opponentId && !gameOver) {
+        alert("對手已離開遊戲");
+        location.reload(); 
+      }
+    } else {
+      // 如果節點消失(對手離線)
+      if(!gameOver) { alert("對手連線中斷"); location.reload(); }
+    }
+  });
+
+  // C. 啟動遊戲
+  lobbyUI.style.display = "none"; 
+  initGame(); 
+  bgm.play(); 
+  gameLoop();
+}
+
 function stopLobbyListen() {
-  // 關閉監聽以節省流量
+  // 關閉大廳全體監聽
   db.ref("users").off("value");
+  
+  // 如果已經有對手，也確保舊的對手監聽被清除 (防止重複監聽)
+  if (opponentId) {
+    db.ref(`users/${opponentId}`).off("value");
+  }
 }
 
 resizeCanvas(); 
