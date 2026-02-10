@@ -242,7 +242,7 @@ function getCurrentGameState() {
       label: "連線對手",
       color: "cyan",
       facing: op.x > 0.5 ? 1 : -1,
-      bullets: remoteBullets
+      bullets: enemyBullets // <-- 改成這一行，確保 draw() 讀取正確的子彈陣列
     };
   } else if (enemy) {
     // AI 邏輯保持不變...
@@ -282,95 +282,79 @@ function resizeCanvas() {
 
 // --- 遊戲邏輯 ---
 function update() {
-  if(gameOver || !player) return;
+  if (gameOver || !player) return;
   const game = getCurrentGameState();
 
   // --- 1. 玩家水平移動 ---
-  let pLeftLimit = getPerspectiveX(player.y, 0) + basePlayerW/2;
-  let pRightLimit = getPerspectiveX(player.y, canvas.width) - basePlayerW/2;
-  let dx = targetX - player.x, mSpeed = canvas.width/5 / 60;
-  if(Math.abs(dx) > mSpeed) dx = mSpeed * Math.sign(dx);
+  let pLeftLimit = getPerspectiveX(player.y, 0) + basePlayerW / 2;
+  let pRightLimit = getPerspectiveX(player.y, canvas.width) - basePlayerW / 2;
+  let dx = targetX - player.x, mSpeed = canvas.width / 5 / 60;
+  if (Math.abs(dx) > mSpeed) dx = mSpeed * Math.sign(dx);
   player.x = Math.max(pLeftLimit, Math.min(player.x + dx, pRightLimit));
 
   // --- 2. 玩家子彈：更新座標與攻擊判定 ---
-bullets.forEach(b => {
-  b.progress = RICO_MATH.getTimeProgress(b.timestamp);
-  const d = RICO_MATH.getBulletData(b, false, false);
-  b.x = d.x; b.y = d.y;
+  bullets.forEach(b => {
+    b.progress = RICO_MATH.getTimeProgress(b.timestamp);
+    const d = RICO_MATH.getBulletData(b, false, false);
+    b.x = d.x; b.y = d.y;
 
-  // 統一判定：Y 進度 0.75~0.8 & X 距離小於敵人寬度的一半
-  if (!b.hit && b.progress >= 0.75 && b.progress <= 0.88) {
-    const xDist = Math.abs(b.x - game.enemy.x);
-    if (xDist <= game.enemy.w / 2) { 
-      enemyHP--; 
-      b.hit = true; 
-	  b.progress = 1;   // 強制設為結束值觸發消失
-      hitSound.currentTime = 0; hitSound.play();
+    // 判定命中敵人：Y 進度 0.75~0.88 之間，且 X 距離足夠近
+    if (!b.hit && b.progress >= 0.75 && b.progress <= 0.88) {
+      const xDist = Math.abs(b.x - game.enemy.x);
+      if (xDist <= game.enemy.w / 2) {
+        enemyHP--;
+        b.hit = true;
+        b.progress = 1; // 強制結束
+        hitSound.currentTime = 0; hitSound.play();
+      }
     }
-  }
-});
-
-  // 玩家子彈回收
+  });
+  // 回收玩家子彈
   bullets = bullets.filter(b => b.progress < 1.0 && !b.hit);
 
-  // --- 3. 敵人子彈：PVP 與 AI 邏輯共用 ---
-  let combinedEnemyBullets = [];
-
-  if (game.enemy.isPVP) {
-    // PVP 模式：從對手數據中取得子彈
-    combinedEnemyBullets = game.enemy.bullets;
-  } else if (enemy) {
-    // AI 模式：更新 AI 移動並使用本地 AI 子彈陣列
+  // --- 3. 敵人子彈（AI 或 PVP 共用）：更新與判定 ---
+  // 若是 AI 模式，則執行 AI 位移與開火邏輯
+  if (!game.enemy.isPVP && enemy) {
     updateAI(game.enemy.w);
-    combinedEnemyBullets = enemyBullets;
   }
 
-  // 統一處理所有「來自前方」的子彈
-  // --- 3. 敵人子彈：PVP 與 AI 邏輯共用 ---
-combinedEnemyBullets.forEach(eb => {
-  eb.progress = RICO_MATH.getTimeProgress(eb.timestamp);
-  const d = RICO_MATH.getBulletData(eb, true, game.enemy.isPVP);
-  
-  // 統一判定：Y 進度 0.75~0.8 & X 距離小於玩家寬度的一半
-  if (!eb.hit && eb.progress >= 0.75 && eb.progress <= 0.88) {
-    const xDist = Math.abs(d.x - player.x);
-    if (xDist <= basePlayerW / 2) { 
-      eb.hit = true; 
-	  eb.progress = 1;   // 強制設為結束值觸發消失
-      playerHP--;
-      hitSound.currentTime = 0; hitSound.play();
-      userRef.update({ hp: playerHP });
+  // 統一處理 enemyBullets 陣列（PVP 的子彈由 enterPVPMode 的監聽器推入此陣列）
+  enemyBullets.forEach(eb => {
+    eb.progress = RICO_MATH.getTimeProgress(eb.timestamp);
+    const d = RICO_MATH.getBulletData(eb, true, game.enemy.isPVP);
+    eb.x = d.x; eb.y = d.y;
+
+    // 判定命中玩家：Y 進度 0.75~0.88 之間，且 X 距離靠近玩家
+    if (!eb.hit && eb.progress >= 0.75 && eb.progress <= 0.88) {
+      const xDist = Math.abs(eb.x - player.x);
+      if (xDist <= basePlayerW / 2) {
+        eb.hit = true;
+        eb.progress = 1; // 強制結束
+        playerHP--;
+        hitSound.currentTime = 0; hitSound.play();
+        userRef.update({ hp: playerHP });
+      }
     }
-  }
-});
+  });
+  // 統一回收敵人子彈（包含 AI 與 PVP）
+  enemyBullets = enemyBullets.filter(eb => eb.progress < 1.2 && !eb.hit);
 
-  // 如果是 AI 模式，手動回收本地子彈陣列
-  if (!game.enemy.isPVP) {
-    enemyBullets = enemyBullets.filter(b => b.progress < 1.2 && !b.hit);
-  }
+  // --- 4. 遊戲結束判定 ---
+  if (playerHP <= 0 || enemyHP <= 0) {
+    gameOver = true;
+    bgm.pause();
+    (playerHP <= 0 ? failSound : winSound).play();
 
-  // --- 4. 遊戲結束與同步 ---
-  // 結束判定
-if(playerHP <= 0 || (game.enemy.hp <= 0)) {
-  gameOver = true; 
-  bgm.pause(); 
-  (playerHP <= 0 ? failSound : winSound).play();
-  
-  setTimeout(() => { 
-    // 1. 先徹底清理舊的 PVP 數據與監聽
-    userRef.update({ opponentId: null, lastShot: null, request: null }); 
-    stopLobbyListen(); // 確保舊監聽被關閉
-    
-    // 2. 顯示大廳 UI
-    lobbyUI.style.display = "block"; 
-    
-    // 3. 關鍵：延遲 1 秒再重新啟動大廳掃描，增加交握保護
     setTimeout(() => {
-      startLobbyListen(); 
-    }, 1000); 
-    
-  }, 3000); // 維持原本的 3 秒勝利/失敗畫面顯示
-}
+      userRef.update({ opponentId: null, lastShot: null, request: null });
+      stopLobbyListen();
+      lobbyUI.style.display = "block";
+      setTimeout(() => {
+        startLobbyListen();
+      }, 1000);
+    }, 3000);
+  }
+  
   syncToFirebase();
 }
 
