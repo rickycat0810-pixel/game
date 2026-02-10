@@ -602,22 +602,45 @@ function startLobbyListen() {
 }
 
 function enterPVPMode() {
-  stopLobbyListen(); // 先清理
+  stopLobbyListen(); // 清理舊監聽
+
+  // 增加一個變數來追蹤最後處理過的子彈，避免重複 push 同一顆子彈
+  let lastProcessedShotTime = 0;
 
   // 開啟「僅限對手」的精準監聽
   db.ref(`users/${opponentId}`).on("value", (snapshot) => {
-    if (gameOver) return; // 如果遊戲已結束，不再接收同步數據
+    if (gameOver) return; 
     
     const data = snapshot.val();
     if (data) {
-      otherPlayers[opponentId] = data;
-
-      // 檢查對手是否離開 (加上緩衝判斷)
-      if (!data.opponentId && !gameOver) {
-        // 如果剛進入遊戲 1.5 秒內 detect 到 null，可能是同步延遲，暫不處理
-        // 這是一種簡單的交握保護
-        console.log("偵測到對手 ID 為空，監控中...");
+      // --- 核心修改：將對手的開槍資料 push 進本地共用的 enemyBullets ---
+      if (data.lastShot && data.lastShot.timestamp > lastProcessedShotTime) {
+        lastProcessedShotTime = data.lastShot.timestamp;
+        
+        // 1. 計算對手在我的畫面中的起點 X
+        // 因為對手是面對著我，所以他的左邊是我的右邊，使用 (1 - ratio) 進行鏡像反轉
+        const remoteX = RICO_MATH.getCanvasXByRatio(1 - data.lastShot.startXRatio, vanishPoint.y + 0.2 * RICO_MATH.ViewDeep);
+        
+        // 2. 將子彈推入 enemyBullets 陣列
+        // 這裡套用與 AI 敵人完全相同的物件結構，讓 update() 能自動處理後續
+        enemyBullets.push({
+          startX: remoteX,
+          startY: vanishPoint.y + 0.2 * RICO_MATH.ViewDeep,
+          x: remoteX,
+          y: vanishPoint.y + 0.2 * RICO_MATH.ViewDeep,
+          progress: 0,
+          timestamp: data.lastShot.timestamp,
+          hit: false
+        });
       }
+
+      // --- 權威同步：以對手的 Firebase HP 為準 ---
+      // 避免本地判定與網路同步產生衝突，直接讀取對手同步過來的 HP
+      if (data.hp !== undefined) {
+        enemyHP = data.hp;
+      }
+
+      otherPlayers[opponentId] = data;
     } else {
       if(!gameOver) { 
         alert("對手連線中斷"); 
