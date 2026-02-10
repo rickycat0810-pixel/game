@@ -37,6 +37,10 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script> 
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
+
+let lastOpponentX = 0.5; // 預設中間
+let opponentFacing = 1;  // 預設朝向
+
 // --- 基礎定義與 Firebase ---
 let lastFirebaseUpdateTime = 0;
 const FIREBASE_TICK_RATE = 20; 
@@ -241,7 +245,7 @@ function getCurrentGameState() {
       hp: op.hp !== undefined ? op.hp : maxHP, // 直接讀取對手同步過來的 HP
       label: "連線對手",
       color: "cyan",
-      facing: op.x > 0.5 ? 1 : -1,
+      facing: opponentFacing, // <--- 改用這變數
       bullets: enemyBullets // <-- 改成這一行，確保 draw() 讀取正確的子彈陣列
     };
   } else if (enemy) {
@@ -299,7 +303,7 @@ function update() {
     b.x = d.x; b.y = d.y;
 
     // 判定命中敵人：Y 進度 0.75~0.88 之間，且 X 距離足夠近
-    if (!b.hit && b.progress >= 0.75 && b.progress <= 0.88) {
+    if (!b.hit && b.progress >= 0.75 && b.progress <= 0.92) {
       const xDist = Math.abs(b.x - game.enemy.x);
       if (xDist <= game.enemy.w / 2) {
         enemyHP--;
@@ -325,7 +329,7 @@ function update() {
     eb.x = d.x; eb.y = d.y;
 
     // 判定命中玩家：Y 進度 0.75~0.88 之間，且 X 距離靠近玩家
-    if (!eb.hit && eb.progress >= 0.75 && eb.progress <= 0.88) {
+    if (!eb.hit && eb.progress >= 0.75 && eb.progress <= 0.92) {
       const xDist = Math.abs(eb.x - player.x);
       if (xDist <= basePlayerW / 2) {
         eb.hit = true;
@@ -597,16 +601,22 @@ function enterPVPMode() {
     
     const data = snapshot.val();
     if (data) {
-      // --- 核心修改：將對手的開槍資料 push 進本地共用的 enemyBullets ---
+      // --- 核心修改 1：朝向邏輯重構 ---
+      // 透過比較目前的 x 與上一次的 lastOpponentX 來決定對手臉部朝向
+      if (data.x !== undefined && data.x !== lastOpponentX) {
+        // 因為是鏡像視角，對手 X 變大代表在你的畫面往左走，反之亦然
+        opponentFacing = data.x > lastOpponentX ? 1 : -1;
+        lastOpponentX = data.x;
+      }
+
+      // --- 核心修改 2：將對手的開槍資料 push 進本地共用的 enemyBullets ---
       if (data.lastShot && data.lastShot.timestamp > lastProcessedShotTime) {
         lastProcessedShotTime = data.lastShot.timestamp;
         
-        // 1. 計算對手在我的畫面中的起點 X
-        // 因為對手是面對著我，所以他的左邊是我的右邊，使用 (1 - ratio) 進行鏡像反轉
+        // 計算對手在我的畫面中的起點 X (使用鏡像反轉)
         const remoteX = RICO_MATH.getCanvasXByRatio(1 - data.lastShot.startXRatio, vanishPoint.y + 0.2 * RICO_MATH.ViewDeep);
         
-        // 2. 將子彈推入 enemyBullets 陣列
-        // 這裡套用與 AI 敵人完全相同的物件結構，讓 update() 能自動處理後續
+        // 將子彈推入 enemyBullets 陣列，套用與 AI 相同的結構
         enemyBullets.push({
           startX: remoteX,
           startY: vanishPoint.y + 0.2 * RICO_MATH.ViewDeep,
@@ -619,7 +629,6 @@ function enterPVPMode() {
       }
 
       // --- 權威同步：以對手的 Firebase HP 為準 ---
-      // 避免本地判定與網路同步產生衝突，直接讀取對手同步過來的 HP
       if (data.hp !== undefined) {
         enemyHP = data.hp;
       }
