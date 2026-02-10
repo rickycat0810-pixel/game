@@ -344,19 +344,30 @@ function update() {
   enemyBullets = enemyBullets.filter(eb => eb.progress < 1.2 && !eb.hit);
 
   // --- 4. 遊戲結束判定 ---
-  if (playerHP <= 0 || enemyHP <= 0) {
+  if ((playerHP <= 0 || enemyHP <= 0) && !gameOver) {
     gameOver = true;
     bgm.pause();
     (playerHP <= 0 ? failSound : winSound).play();
 
+    // 延遲 3.5 秒再回到大廳，確保玩家看清楚勝利字樣與動畫
     setTimeout(() => {
-      userRef.update({ opponentId: null, lastShot: null, request: null });
-      stopLobbyListen();
+      // 先停止所有監聽，防止數據回流觸發 UI
+      stopLobbyListen(); 
+      
+      // 清除戰鬥狀態
+      userRef.update({ 
+        opponentId: null, 
+        lastShot: null, 
+        request: null,
+        hp: maxHP // 重置 HP 供下次使用
+      });
+
+      // 顯示大廳並重新開始監聽
       lobbyUI.style.display = "block";
       setTimeout(() => {
         startLobbyListen();
-      }, 1000);
-    }, 3000);
+      }, 500);
+    }, 3500); 
   }
   
   syncToFirebase();
@@ -405,11 +416,30 @@ function draw() {
   const game = getCurrentGameState();
 
   if(gameOver){
-    ctx.fillStyle = "yellow"; ctx.font = "40px Arial"; ctx.textAlign = "center";
-    ctx.fillText(playerHP <= 0 ? "敵人勝利!" : "玩家勝利!", canvas.width/2, canvas.height/2);
+    ctx.fillStyle = "yellow"; 
+    ctx.font = "bold 40px Arial"; 
+    ctx.textAlign = "center";
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = "black";
+
+    let winText = "";
+    if (opponentId) {
+      // PVP 模式：顯示 ID
+      winText = (playerHP <= 0) ? `勝利者: ${opponentId}` : `勝利者: ${playerId}`;
+    } else {
+      // AI 模式
+      winText = (playerHP <= 0) ? "AI 敵人勝利!" : "玩家勝利!";
+    }
+
+    ctx.fillText(winText, canvas.width/2, canvas.height/2);
+    ctx.shadowBlur = 0; // 重置陰影避免影響其他繪製
+
     if(playerHP <= 0){ 
-      ctx.save(); let fDir = game.player.facing;
-      ctx.scale(fDir, 1); ctx.drawImage(failImg, fDir*game.player.x - basePlayerW, game.player.y - basePlayerH/1.3, basePlayerW*1.7, basePlayerH/1.3); ctx.restore();
+      ctx.save(); 
+      let fDir = game.player.facing;
+      ctx.scale(fDir, 1); 
+      ctx.drawImage(failImg, fDir*game.player.x - basePlayerW, game.player.y - basePlayerH/1.3, basePlayerW*1.7, basePlayerH/1.3); 
+      ctx.restore();
     }
     return;
   }
