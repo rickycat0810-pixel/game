@@ -72,6 +72,41 @@ let player, enemy, bullets, enemyBullets, vanishPoint, bottomBoundaryY, playerHP
 let lastPlayerShot = 0, lastEnemyShot = 0, lastEnemyDodge = 0;
 const shotCooldown = 500, dodgeCooldown = 200, maxHP = 5;
 let otherPlayers = {};
+
+// --- 自動化與節流配置 ---
+let idleTimer;
+const IDLE_TIMEOUT = 180000; // 3分鐘 (180,000 毫秒)
+
+function resetIdleTimer() {
+  clearTimeout(idleTimer);
+  // 如果目前是離線狀態（在大廳被自動關閉後），點擊畫面可重連
+  if (lobbyUI.style.display !== "none" && lobbyStatus.textContent.includes("離線")) {
+      location.reload(); // 最簡單的重連方式是重新載入
+  }
+  idleTimer = setTimeout(handleIdleTimeout, IDLE_TIMEOUT);
+}
+
+function handleIdleTimeout() {
+  if (!gameOver) {
+    // 1. 遊戲中：自動切換成本地 AI 模式
+    console.log("偵測到閒置：切換為本地 AI 模式");
+    opponentId = null; // 斷開與對手的對聯
+    stopLobbyListen(); // 停止接收 Firebase 數據
+    // 這裡不中斷遊戲，讓 update() 繼續運行 AI 邏輯
+  } else {
+    // 2. 大廳中：關閉遊戲並斷開連線
+    console.log("偵測到閒置：關閉大廳連線");
+    userRef.remove(); // 從 Firebase 刪除自己的 ID
+    firebase.database().goOffline(); // 徹底斷開 WebSocket 流量
+    lobbyStatus.textContent = "閒置過久，已進入離線模式";
+    lobbyStatus.style.color = "red";
+    playerListDiv.innerHTML = "<p>請重新整理頁面以啟動連線</p>";
+  }
+}
+
+// 此因子控制子彈基礎速度。公式為：速度 = 半徑 * FACTOR
+const BULLET_SPEED_FACTOR = 0.0016;
+
 let opponentId = null;
 let pendingInviteId = null;
 let showGrid = false;
@@ -119,7 +154,7 @@ const RICO_MATH = {
       bx = b.x; by = b.y;
     }
     const s = RICO_MATH.getScaleAtY(by).scale;
-    return { x: bx, y: by, scale: s, radius: Math.max((basePlayerW / 8) * s, 3) };
+    return { x: bx, y: by, scale: s, radius: Math.max((basePlayerW / 8) * s, 0.1) };
   }
 };
 
@@ -129,7 +164,7 @@ function getPerspectiveX(y, baseX){ return vanishPoint.x + (baseX - vanishPoint.
 // --- 狀態獲取：整合 update 與 draw 共用數據 ---
 function getCurrentGameState() {
   const state = {
-    player: { x: player?.x, y: player?.y, w: basePlayerW, h: basePlayerH, hp: playerHP, facing: targetX > player?.x ? -1 : 1 },
+    player: { x: player?.x, y: player?.y, hp: playerHP, facing: targetX > player?.x ? -1 : 1 },
     enemy: { x: 0, y: 0, w: 0, h: 0, hp: 0, label: "", color: "", isPVP: false, facing: 1, bullets: [] }
   };
 
@@ -138,30 +173,41 @@ function getCurrentGameState() {
 
   if (opponentId && otherPlayers[opponentId]) {
     const op = otherPlayers[opponentId];
+    let remoteBullets = [];
+    
+    // 如果對手有最新的射擊記錄，根據時間差計算當前 progress
+    if (op.lastShot) {
+      const timeDiff = Date.now() - op.lastShot.timestamp;
+      // 假設子彈飛完全程約需 1.5 秒 (根據原公式 speed 換算)
+      const calculatedProgress = timeDiff / 1500; 
+      if (calculatedProgress < 1) {
+        remoteBullets.push({
+          xRatio: op.lastShot.startXRatio,
+          progress: calculatedProgress
+        });
+      }
+    }
+
     state.enemy = {
       isPVP: true,
       x: RICO_MATH.getCanvasXByRatio(op.x, enemyY, true),
       y: enemyY,
       w: basePlayerW * eScale.scale,
       h: basePlayerH * eScale.scale,
-      hp: op.hp,
+      hp: op.hp !== undefined ? op.hp : maxHP, // 直接讀取對手同步過來的 HP
       label: "連線對手",
       color: "cyan",
       facing: op.x > 0.5 ? 1 : -1,
-      bullets: op.bullets || []
+      bullets: remoteBullets
     };
   } else if (enemy) {
+    // AI 邏輯保持不變...
     state.enemy = {
       isPVP: false,
-      x: enemy.x,
-      y: enemy.y,
-      w: basePlayerW * eScale.scale,
-      h: basePlayerH * eScale.scale,
-      hp: enemyHP,
-      label: "AI 敵人",
-      color: "white",
-      facing: enemy.dir === 1 ? -1 : 1,
-      bullets: enemyBullets
+      x: enemy.x, y: enemy.y,
+      w: basePlayerW * eScale.scale, h: basePlayerH * eScale.scale,
+      hp: enemyHP, label: "AI 敵人", color: "white",
+      facing: enemy.dir === 1 ? -1 : 1, bullets: enemyBullets
     };
   }
   return state;
@@ -195,46 +241,75 @@ function update() {
   if(gameOver || !player) return;
   const game = getCurrentGameState();
 
-  // 1. 玩家移動
+  // 玩家移動 (邏輯不變...)
   let pLeftLimit = getPerspectiveX(player.y, 0) + basePlayerW/2;
   let pRightLimit = getPerspectiveX(player.y, canvas.width) - basePlayerW/2;
   let dx = targetX - player.x, mSpeed = canvas.width/5 / 60;
   if(Math.abs(dx) > mSpeed) dx = mSpeed * Math.sign(dx);
   player.x = Math.max(pLeftLimit, Math.min(player.x + dx, pRightLimit));
 
-  // 2. 玩家子彈更新
+  // 玩家子彈更新 (僅供本地視覺顯示)
   bullets.forEach(b => {
-    let speed = 0.02 * ((b.y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y)) * (1 + Math.abs((b.startX - vanishPoint.x) / (b.startY - vanishPoint.y))) + 0.001;
+    const d = RICO_MATH.getBulletData(b, false, false, 0);
+    let speed = d.radius * BULLET_SPEED_FACTOR * (1 + Math.abs((b.startX - vanishPoint.x) / (b.startY - vanishPoint.y)));
     b.progress += speed; 
     b.x = (1-b.progress)*b.startX + b.progress*vanishPoint.x; 
     b.y = (1-b.progress)*b.startY + b.progress*vanishPoint.y;
   });
   bullets = bullets.filter(b => b.progress < 1);
 
-  // 3. 碰撞檢查
-  if(!game.enemy.isPVP) updateAI(game.enemy.w);
+  // --- 重點：受傷判定 ---
+  if (game.enemy.isPVP) {
+    // 偵測對手發射過來的子彈 (根據對方傳來的 lastShot 計算路徑)
+    // 這裡由 getCurrentGameState 提供的 game.enemy.bullets 進行判定
+    game.enemy.bullets.forEach(b => {
+      const bData = RICO_MATH.getBulletData(b, true, true, game.enemy.y);
+      if (Math.sqrt((bData.x - player.x) ** 2 + (bData.y - player.y) ** 2) < 25) { // 25 為碰撞半徑
+        if (!b.hit) { // 防止同一顆子彈重複扣血
+          b.hit = true;
+          playerHP--;
+          hitSound.currentTime = 0; hitSound.play();
+          // 血量發生變動時才進行同步
+          userRef.update({ hp: playerHP });
+        }
+      }
+    });
+  } else if (enemy) {
+    // 1. 更新 AI 行為與 AI 子彈位置
+    updateAI(game.enemy.w);
 
-  // 我方射擊對手
-  bullets.forEach(b => {
-    if(Math.sqrt((b.x - game.enemy.x)**2 + (b.y - game.enemy.y)**2) < game.enemy.w/2) {
-      if(!game.enemy.isPVP) enemyHP--; 
-      b.progress = 1; hitSound.currentTime = 0; hitSound.play();
-    }
-  });
+    // 2. 判定：玩家子彈 是否打中 AI (這部分您原本就有)
+    bullets.forEach(b => {
+      if(Math.sqrt((b.x - game.enemy.x)**2 + (b.y - game.enemy.y)**2) < game.enemy.w/2) {
+        enemyHP--; 
+        b.progress = 1; // 讓子彈消失
+        hitSound.currentTime = 0; hitSound.play();
+      }
+    });
 
-  // 對手射擊我方
-  game.enemy.bullets.forEach(b => {
-    const bData = RICO_MATH.getBulletData(b, true, game.enemy.isPVP, game.enemy.y);
-    const hitRange = game.enemy.isPVP ? Math.max(bData.radius, 20) : basePlayerW / 2;
-    if (Math.sqrt((bData.x - player.x) ** 2 + (bData.y - player.y) ** 2) < hitRange) {
-      playerHP--; b.progress = 1.1; hitSound.currentTime = 0; hitSound.play();
-    }
-  });
+    // 3. 修正補充：判定 AI 子彈 是否打中 玩家 (補回這段)
+    enemyBullets.forEach(eb => {
+      if(Math.sqrt((eb.x - player.x)**2 + (eb.y - player.y)**2) < 25) { // 25 為碰撞半徑
+        if (!eb.hit) { 
+          eb.hit = true;
+          playerHP--;
+          eb.progress = 1; // 讓子彈消失
+          hitSound.currentTime = 0; hitSound.play();
+        }
+      }
+    });
+  }
 
-  // 4. 結束判定
-  if(playerHP <= 0 || (game.enemy.hp <= 0 && !game.enemy.isPVP) || (game.enemy.isPVP && game.enemy.hp <= 0)){
-    gameOver = true; bgm.pause(); (playerHP <= 0 ? failSound : winSound).play();
-    setTimeout(() => { userRef.update({ opponentId: null }); lobbyUI.style.display = "block"; }, 3000);
+  // 結束判定
+  if(playerHP <= 0 || (game.enemy.hp <= 0)) {
+    gameOver = true; 
+    bgm.pause(); 
+    (playerHP <= 0 ? failSound : winSound).play();
+    setTimeout(() => { 
+      userRef.update({ opponentId: null, lastShot: null }); 
+      lobbyUI.style.display = "block"; 
+      startLobbyListen(); 
+    }, 3000);
   }
   syncToFirebase();
 }
@@ -257,7 +332,13 @@ function updateAI(enemyW) {
   }
 
   enemyBullets.forEach(b => {
-    b.progress += 0.001 + 0.02 * ((b.y - vanishPoint.y) / (bottomBoundaryY - vanishPoint.y)) * (1 + Math.abs((b.startX - vanishPoint.x) / (b.startY - vanishPoint.y)));
+    // 獲取敵方子彈當前半徑
+    const d = RICO_MATH.getBulletData(b, false, false, 0);
+    
+    // 使用與玩家完全相同的計算方式
+    let speed = d.radius * BULLET_SPEED_FACTOR * (1 + Math.abs((b.startX - vanishPoint.x) / (b.startY - vanishPoint.y)));
+    b.progress += speed;
+
     let slope = (b.startX - vanishPoint.x) / (b.startY - vanishPoint.y);
     b.x = (1-b.progress)*b.startX + b.progress * (vanishPoint.x + slope * RICO_MATH.ViewDeep);
     b.y = (1-b.progress)*b.startY + b.progress * bottomBoundaryY;
@@ -322,11 +403,13 @@ function draw() {
 // --- 輔助邏輯與事件 ---
 function syncToFirebase() {
   const now = Date.now();
-  if (now - lastFirebaseUpdateTime < FIREBASE_TICK_RATE || !player || gameOver) return;
+  if (!opponentId || gameOver || !player) return;
+  if (now - lastFirebaseUpdateTime < FIREBASE_TICK_RATE) return;
+  
   lastFirebaseUpdateTime = now;
+  // 僅同步 X 座標比例，大幅降低封包大小
   userRef.update({ 
-    x: player.x / canvas.width, hp: playerHP, 
-    bullets: bullets.map(b => ({ xRatio: b.startX / canvas.width, progress: b.progress }))
+    x: player.x / canvas.width
   });
 }
 
@@ -347,7 +430,9 @@ function initGame(){
   enemy = { x: vanishPoint.x, y: vanishPoint.y + (1/5) * (bottomBoundaryY - vanishPoint.y), dir: 1 };
   bullets = []; enemyBullets = []; playerHP = maxHP; enemyHP = maxHP; gameOver = false;
   toggleGridBtn.style.display = "block"; resizeCanvas();
-  userRef.set({ x: player.x / canvas.width, hp: playerHP, bullets: [], opponentId: opponentId });
+  if (opponentId) {
+    userRef.set({ x: player.x / canvas.width, hp: playerHP, bullets: [], opponentId: opponentId });
+  }
 }
 
 let targetX = 0;
@@ -358,44 +443,90 @@ canvas.addEventListener("touchmove", e => { e.preventDefault(); targetX = e.touc
 
 function shootBullet() {
   if(gameOver || !player || Date.now() - lastPlayerShot < shotCooldown) return;
-  lastPlayerShot = Date.now();
-  bullets.push({ startX: player.x, startY: player.y - basePlayerH*0.5, x: player.x, y: player.y - basePlayerH*0.5, progress: 0 });
+  const now = Date.now();
+  lastPlayerShot = now;
+
+  const startX = player.x;
+  const startY = player.y - basePlayerH * 0.5;
+  
+  // 本地顯示子彈
+  bullets.push({ startX, startY, x: startX, y: startY, progress: 0 });
   shootSound.currentTime = 0; shootSound.play();
+
+  // PVP 模式下，僅傳送發射瞬間的數據與時間戳
+  if (opponentId) {
+    db.ref(`users/${playerId}/lastShot`).update({
+      startXRatio: startX / canvas.width,
+      startY: startY,
+      timestamp: now
+    });
+  }
 }
 
 function gameLoop() { update(); draw(); if(!gameOver) requestAnimationFrame(gameLoop); }
 
 toggleGridBtn.addEventListener("click", () => { showGrid = !showGrid; toggleGridBtn.textContent = showGrid ? "隱藏格線" : "顯示格線"; });
-playAIBtn.onclick = () => { opponentId = null; lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop(); };
+playAIBtn.onclick = () => { 
+  opponentId = null; 
+  stopLobbyListen(); // <-- 插入這行：進入 AI 模式立即停止監聽
+  lobbyUI.style.display = "none"; 
+  initGame(); 
+  bgm.play(); 
+  gameLoop(); 
+};
 
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("orientationchange", resizeCanvas);
 
 // Firebase 監聽
-db.ref("users").on("value", snapshot => {
-  otherPlayers = snapshot.val() || {};
-  const me = otherPlayers[playerId];
-  playerListDiv.innerHTML = "";
-  Object.keys(otherPlayers).forEach(id => {
-    if (id === playerId) return;
-    const p = otherPlayers[id], item = document.createElement("div");
-    item.className = "player-item"; item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
-    if (!p.opponentId) item.onclick = () => { db.ref(`users/${id}/request`).set({ from: playerId }); };
-    playerListDiv.appendChild(item);
+function startLobbyListen() {
+  db.ref("users").on("value", snapshot => {
+    otherPlayers = snapshot.val() || {};
+    const me = otherPlayers[playerId];
+    playerListDiv.innerHTML = "";
+    Object.keys(otherPlayers).forEach(id => {
+      if (id === playerId) return;
+      const p = otherPlayers[id], item = document.createElement("div");
+      item.className = "player-item"; item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
+      if (!p.opponentId) item.onclick = () => { db.ref(`users/${id}/request`).set({ from: playerId }); };
+      playerListDiv.appendChild(item);
+    });
+    if (me?.request && gameOver) {
+      if (confirm("來自 " + me.request.from + " 的挑戰？")) {
+        opponentId = me.request.from; userRef.update({ request: null, opponentId: opponentId });
+        db.ref(`users/${opponentId}`).update({ opponentId: playerId });
+	  
+	    stopLobbyListen(); // 進入 PVP 前關閉監聽
+	  
+        lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+      } else { userRef.update({ request: null }); }
+    }
+    if (me?.opponentId && !opponentId && gameOver) {
+      opponentId = me.opponentId; 
+	  stopLobbyListen(); // 被挑战進入遊戲前關閉監聽
+	  lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
+    }
   });
-  if (me?.request && gameOver) {
-    if (confirm("來自 " + me.request.from + " 的挑戰？")) {
-      opponentId = me.request.from; userRef.update({ request: null, opponentId: opponentId });
-      db.ref(`users/${opponentId}`).update({ opponentId: playerId });
-      lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
-    } else { userRef.update({ request: null }); }
-  }
-  if (me?.opponentId && !opponentId && gameOver) {
-    opponentId = me.opponentId; lobbyUI.style.display = "none"; initGame(); bgm.play(); gameLoop();
-  }
+}
+
+function stopLobbyListen() {
+  // 關閉監聽以節省流量
+  db.ref("users").off("value");
+}
+
+resizeCanvas(); 
+draw();
+startLobbyListen(); // <-- 插入這行：初始化大廳監聽
+
+// 監控玩家動作
+["mousemove", "mousedown", "touchstart", "keydown"].forEach(evt => {
+  window.addEventListener(evt, resetIdleTimer, { passive: true });
 });
 
-resizeCanvas(); draw();
+// 初始啟動計時器
+resetIdleTimer();
+
+
 </script>
 </body>
 </html>
