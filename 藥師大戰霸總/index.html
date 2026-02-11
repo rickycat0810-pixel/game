@@ -424,15 +424,16 @@ function draw() {
 
     let winText = "";
     if (opponentId) {
-      // PVP 模式：顯示 ID
-      winText = (playerHP <= 0) ? `勝利者: ${opponentId}` : `勝利者: ${playerId}`;
+      // 取得雙方顯示名稱
+      const opDisplayName = otherPlayers[opponentId]?.name || "連線對手";
+      const myDisplayName = otherPlayers[playerId]?.name || "我";
+      winText = (playerHP <= 0) ? `勝利者: ${opDisplayName}` : `勝利者: ${myDisplayName}`;
     } else {
-      // AI 模式
       winText = (playerHP <= 0) ? "AI 敵人勝利!" : "玩家勝利!";
     }
 
     ctx.fillText(winText, canvas.width/2, canvas.height/2);
-    ctx.shadowBlur = 0; // 重置陰影避免影響其他繪製
+    ctx.shadowBlur = 0;
 
     if(playerHP <= 0){ 
       ctx.save(); 
@@ -448,12 +449,16 @@ function draw() {
   ctx.save(); ctx.translate(game.enemy.x, game.enemy.y); ctx.scale(game.enemy.facing, 1);
   ctx.drawImage(enemyImg, -game.enemy.w/2, -game.enemy.h, game.enemy.w, game.enemy.h); ctx.restore();
   ctx.fillStyle = game.enemy.color; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
-  ctx.fillText(game.enemy.label, game.enemy.x, game.enemy.y - game.enemy.h - 25);
+  
+  // 對戰中也顯示名字標籤
+  const labelName = (opponentId && otherPlayers[opponentId]?.name) ? otherPlayers[opponentId].name : game.enemy.label;
+  ctx.fillText(labelName, game.enemy.x, game.enemy.y - game.enemy.h - 25);
+  
   drawHPAbove(game.enemy.x, game.enemy.y, game.enemy.hp, maxHP, game.enemy.w, game.enemy.h, true);
 
   // 畫敵人子彈
   game.enemy.bullets.forEach(b => {
-    if (b.hit) return; // 修正：擊中立即不繪製
+    if (b.hit) return; 
     const d = RICO_MATH.getBulletData(b, true, game.enemy.isPVP); 
     ctx.beginPath(); ctx.fillStyle = "orange"; ctx.arc(d.x, d.y, d.radius, 0, Math.PI*2); ctx.fill();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 2 * d.scale; ctx.stroke();
@@ -461,39 +466,19 @@ function draw() {
 
   // 畫玩家子彈
   bullets.forEach(b => {
-    if (b.hit) return; // 擊中立即消失
-    
+    if (b.hit) return; 
     let drawX, drawY, drawRadius;
     const d = RICO_MATH.getBulletData(b, false, false);
-
     if (b.progress <= 1.0) {
-      // --- 階段 A：1.0 內（正常飛行階段）---
-      drawX = d.x;
-      drawY = d.y;
-      drawRadius = d.radius;
+      drawX = d.x; drawY = d.y; drawRadius = d.radius;
     } else {
-      // --- 階段 B：超過 1.0（延伸繪圖階段）---
-      // 這裡直接與 1.0 內的邏輯脫鉤，強行將座標向消失點線性插值
-      const extP = (b.progress - 1.0) / 0.2; // 計算 1.0 ~ 1.2 之間的二次進度 (0~1)
-      
-      // 起點是敵人線的位置，終點是消失點
+      const extP = (b.progress - 1.0) / 0.2; 
       const enemyLineY = vanishPoint.y + Y_END * RICO_MATH.ViewDeep;
-      
-      // 強行線性延伸：從敵人線 Y 飛向 消失點 Y
       drawY = enemyLineY + extP * (vanishPoint.y - enemyLineY);
-      
-      // X 軸同樣根據比例向消失點收縮
-      const xAtEnemy = d.x; // 這是 progress=1.0 時的 X（由 getBulletData 提供）
-      drawX = xAtEnemy + extP * (vanishPoint.x - xAtEnemy);
-      
-      // 半徑縮小
+      drawX = d.x + extP * (vanishPoint.x - d.x);
       drawRadius = Math.max(d.radius * (1 - extP), 1.5);
     }
-
-    ctx.beginPath();
-    ctx.fillStyle = "yellow";
-    ctx.arc(drawX, drawY, drawRadius, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.fillStyle = "yellow"; ctx.arc(drawX, drawY, drawRadius, 0, Math.PI * 2); ctx.fill();
   });
 
   // 畫玩家
@@ -583,38 +568,60 @@ window.addEventListener("orientationchange", resizeCanvas);
 
 // Firebase 監聽
 function startLobbyListen() {
-  // 1. 監聽整個大廳 (users 節點)
   db.ref("users").on("value", snapshot => {
     otherPlayers = snapshot.val() || {};
     const me = otherPlayers[playerId];
     
-    // 更新大廳列表 UI
     playerListDiv.innerHTML = "";
     Object.keys(otherPlayers).forEach(id => {
       if (id === playerId) return;
       const p = otherPlayers[id], item = document.createElement("div");
       item.className = "player-item"; 
-      item.textContent = id + (p.opponentId ? " (對戰中)" : " (在線)");
-      if (!p.opponentId) item.onclick = () => { db.ref(`users/${id}/request`).set({ from: playerId }); };
+      
+      // 優先顯示對方的自訂名稱
+      const showName = p.name || id;
+      item.textContent = showName + (p.opponentId ? " (對戰中)" : " (在線)");
+
+      if (!p.opponentId) {
+        item.onclick = () => {
+          // 點擊時才詢問名字，簡單暴力
+          let myName = prompt("請輸入你的暱稱 (12字內):", "玩家");
+          if (myName === null) return; 
+          myName = myName.substring(0, 12) || "匿名玩家";
+          
+          // 更新自己名字並發送請求
+          userRef.update({ name: myName }).then(() => {
+            db.ref(`users/${id}/request`).set({ 
+              from: playerId, 
+              fromName: myName 
+            });
+          });
+        };
+      }
       playerListDiv.appendChild(item);
     });
 
     // 處理：收到挑戰請求
     if (me?.request && gameOver) {
-      if (confirm("來自 " + me.request.from + " 的挑戰？")) {
+      const opName = me.request.fromName || "對手";
+      if (confirm(`來自 ${opName} 的挑戰？`)) {
         opponentId = me.request.from;
+        
+        // 手動將對手名字存入本地快取，供 draw() 使用
+        if (!otherPlayers[opponentId]) otherPlayers[opponentId] = {};
+        otherPlayers[opponentId].name = opName;
+
         userRef.update({ request: null, opponentId: opponentId });
         db.ref(`users/${opponentId}`).update({ opponentId: playerId });
-        enterPVPMode(); // 呼叫進入 PVP 的優化邏輯
+        enterPVPMode();
       } else { 
         userRef.update({ request: null }); 
       }
     }
 
-    // 處理：被挑戰者接受後，自動進入遊戲
     if (me?.opponentId && !opponentId && gameOver) {
       opponentId = me.opponentId; 
-      enterPVPMode(); // 呼叫進入 PVP 的優化邏輯
+      enterPVPMode();
     }
   });
 }
