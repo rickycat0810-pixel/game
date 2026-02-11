@@ -400,22 +400,26 @@ function updateAI(enemyW) {
 
 // --- 繪製 ---
 function draw() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  let grad = ctx.createLinearGradient(0,0,0,canvas.height);
-  grad.addColorStop(0,"skyblue"); grad.addColorStop(1,"white");
-  ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  let grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, "skyblue"); 
+  grad.addColorStop(1, "white");
+  ctx.fillStyle = grad; 
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
 
-  if(showGrid){
+  if (showGrid) {
     ctx.strokeStyle = "gray";
-    gridLines.forEach(line => { ctx.beginPath(); ctx.moveTo(line.x, bottomBoundaryY); ctx.lineTo(vanishPoint.x, vanishPoint.y); ctx.stroke(); });
+    gridLines.forEach(line => { 
+      ctx.beginPath(); ctx.moveTo(line.x, bottomBoundaryY); ctx.lineTo(vanishPoint.x, vanishPoint.y); ctx.stroke(); 
+    });
     ctx.beginPath(); ctx.moveTo(0, bottomBoundaryY); ctx.lineTo(canvas.width, bottomBoundaryY); ctx.stroke();
   }
 
-  if(!player) return;
+  if (!player) return;
   const game = getCurrentGameState();
 
-  if(gameOver){
+  if (gameOver) {
     ctx.fillStyle = "yellow"; 
     ctx.font = "bold 40px Arial"; 
     ctx.textAlign = "center";
@@ -424,33 +428,38 @@ function draw() {
 
     let winText = "";
     if (opponentId) {
-      // 取得雙方顯示名稱
-      const opDisplayName = otherPlayers[opponentId]?.name || "連線對手";
-      const myDisplayName = otherPlayers[playerId]?.name || "我";
-      winText = (playerHP <= 0) ? `勝利者: ${opDisplayName}` : `勝利者: ${myDisplayName}`;
+      // 從 otherPlayers 緩存中讀取最新名字
+      const opName = otherPlayers[opponentId]?.name || "對手";
+      const myName = otherPlayers[playerId]?.name || "我";
+      winText = (playerHP <= 0) ? `勝利者: ${opName}` : `勝利者: ${myName}`;
     } else {
       winText = (playerHP <= 0) ? "AI 敵人勝利!" : "玩家勝利!";
     }
 
-    ctx.fillText(winText, canvas.width/2, canvas.height/2);
+    ctx.fillText(winText, canvas.width / 2, canvas.height / 2);
     ctx.shadowBlur = 0;
 
-    if(playerHP <= 0){ 
+    if (playerHP <= 0) { 
       ctx.save(); 
       let fDir = game.player.facing;
       ctx.scale(fDir, 1); 
-      ctx.drawImage(failImg, fDir*game.player.x - basePlayerW, game.player.y - basePlayerH/1.3, basePlayerW*1.7, basePlayerH/1.3); 
+      ctx.drawImage(failImg, fDir * game.player.x - basePlayerW, game.player.y - basePlayerH / 1.3, basePlayerW * 1.7, basePlayerH / 1.3); 
       ctx.restore();
     }
     return;
   }
 
   // 畫對手/AI
-  ctx.save(); ctx.translate(game.enemy.x, game.enemy.y); ctx.scale(game.enemy.facing, 1);
-  ctx.drawImage(enemyImg, -game.enemy.w/2, -game.enemy.h, game.enemy.w, game.enemy.h); ctx.restore();
-  ctx.fillStyle = game.enemy.color; ctx.font = "bold 16px Arial"; ctx.textAlign = "center";
-  
-  // 對戰中也顯示名字標籤
+  ctx.save(); 
+  ctx.translate(game.enemy.x, game.enemy.y); 
+  ctx.scale(game.enemy.facing, 1);
+  ctx.drawImage(enemyImg, -game.enemy.w / 2, -game.enemy.h, game.enemy.w, game.enemy.h); 
+  ctx.restore();
+
+  // --- 修正：更精確的暱稱標籤抓取 ---
+  ctx.fillStyle = game.enemy.color; 
+  ctx.font = "bold 16px Arial"; 
+  ctx.textAlign = "center";
   const labelName = (opponentId && otherPlayers[opponentId]?.name) ? otherPlayers[opponentId].name : game.enemy.label;
   ctx.fillText(labelName, game.enemy.x, game.enemy.y - game.enemy.h - 25);
   
@@ -460,7 +469,7 @@ function draw() {
   game.enemy.bullets.forEach(b => {
     if (b.hit) return; 
     const d = RICO_MATH.getBulletData(b, true, game.enemy.isPVP); 
-    ctx.beginPath(); ctx.fillStyle = "orange"; ctx.arc(d.x, d.y, d.radius, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.fillStyle = "orange"; ctx.arc(d.x, d.y, d.radius, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 2 * d.scale; ctx.stroke();
   });
 
@@ -482,8 +491,9 @@ function draw() {
   });
 
   // 畫玩家
-  ctx.save(); ctx.scale(game.player.facing, 1);
-  ctx.drawImage(playerImg, game.player.facing*game.player.x - basePlayerW/2, game.player.y - basePlayerH, basePlayerW, basePlayerH);
+  ctx.save(); 
+  ctx.scale(game.player.facing, 1);
+  ctx.drawImage(playerImg, game.player.facing * game.player.x - basePlayerW / 2, game.player.y - basePlayerH, basePlayerW, basePlayerH);
   ctx.restore();
   drawHPAbove(game.player.x, game.player.y, game.player.hp, maxHP, basePlayerW, basePlayerH, false);
 }
@@ -572,56 +582,75 @@ function startLobbyListen() {
     otherPlayers = snapshot.val() || {};
     const me = otherPlayers[playerId];
     
+    // --- 關鍵補位：處理「發送端」進入對戰 ---
+    // 當對手按下「接受」後，Firebase 會更新我的 opponentId
+    // 此時偵測到變化，發送端必須自動跳轉進入遊戲
+    if (me?.opponentId && !opponentId && gameOver) {
+      opponentId = me.opponentId;
+      console.log("偵測到對手已接受，正在進入遊戲...");
+      
+      // 延遲一小段時間確保數據同步完成
+      setTimeout(() => {
+        stopLobbyListen(); // 停止大廳的所有監聽，防止邏輯重疊
+        enterPVPMode();    // 正式啟動遊戲循環與對手監聽
+      }, 200); 
+      return; // 結束本次 snapshot 處理
+    }
+
+    // 更新大廳清單 UI
     playerListDiv.innerHTML = "";
     Object.keys(otherPlayers).forEach(id => {
       if (id === playerId) return;
-      const p = otherPlayers[id], item = document.createElement("div");
+      const p = otherPlayers[id];
+      const item = document.createElement("div");
       item.className = "player-item"; 
       
-      // 優先顯示對方的自訂名稱
       const showName = p.name || id;
       item.textContent = showName + (p.opponentId ? " (對戰中)" : " (在線)");
 
+      // 只有在大廳且不在對戰中的人才可以點擊挑戰
       if (!p.opponentId) {
-        item.onclick = () => {
-          // 點擊時才詢問名字，簡單暴力
+        item.onclick = async () => {
           let myName = prompt("請輸入你的暱稱 (12字內):", "玩家");
-          if (myName === null) return; 
+          if (myName === null) return; // 使用者按取消
           myName = myName.substring(0, 12) || "匿名玩家";
           
-          // 更新自己名字並發送請求
-          userRef.update({ name: myName }).then(() => {
-            db.ref(`users/${id}/request`).set({ 
-              from: playerId, 
-              fromName: myName 
-            });
+          // 1. 確保暱稱先寫入自己的 Firebase 資料中
+          await userRef.update({ name: myName });
+          
+          // 2. 確定自己資料更新後，再發送挑戰請求給對方
+          db.ref(`users/${id}/request`).set({ 
+            from: playerId, 
+            fromName: myName 
           });
+          alert("邀請已發送，請等待對手接受...");
         };
       }
       playerListDiv.appendChild(item);
     });
 
-    // 處理：收到挑戰請求
+    // --- 處理「接收端」收到挑戰請求 ---
     if (me?.request && gameOver) {
-      const opName = me.request.fromName || "對手";
-      if (confirm(`來自 ${opName} 的挑戰？`)) {
-        opponentId = me.request.from;
+      const req = me.request;
+      if (confirm(`來自 ${req.fromName || "對手"} 的挑戰？`)) {
+        opponentId = req.from;
         
-        // 手動將對手名字存入本地快取，供 draw() 使用
+        // 手動將對手名字存入本地緩存，確保 draw() 第一時間能抓到名字
         if (!otherPlayers[opponentId]) otherPlayers[opponentId] = {};
-        otherPlayers[opponentId].name = opName;
+        otherPlayers[opponentId].name = req.fromName;
 
+        // 接受邀請：
+        // 1. 清空請求 2. 設定自己的對手 ID
         userRef.update({ request: null, opponentId: opponentId });
+        // 3. 回填對手的對手 ID (這會觸發發送端的 if(me?.opponentId) 邏輯)
         db.ref(`users/${opponentId}`).update({ opponentId: playerId });
+        
+        stopLobbyListen();
         enterPVPMode();
       } else { 
+        // 拒絕請求，直接清空
         userRef.update({ request: null }); 
       }
-    }
-
-    if (me?.opponentId && !opponentId && gameOver) {
-      opponentId = me.opponentId; 
-      enterPVPMode();
     }
   });
 }
