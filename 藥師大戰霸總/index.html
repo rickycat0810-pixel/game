@@ -629,31 +629,38 @@ function startLobbyListen() {
 function enterPVPMode() {
   stopLobbyListen(); // 清理舊監聽
 
-  // 增加一個變數來追蹤最後處理過的子彈，避免重複 push 同一顆子彈
   let lastProcessedShotTime = 0;
 
-  // 開啟「僅限對手」的精準監聽
-  db.ref(`users/${opponentId}`).on("value", (snapshot) => {
-    if (gameOver) return; 
-    
+  // --- 修正：確保自己有暱稱，否則對手畫面會看不到你的名字 ---
+  const myCurrentData = otherPlayers[playerId];
+  if (!myCurrentData || !myCurrentData.name) {
+    const tempName = "玩家_" + playerId.substring(0, 4);
+    userRef.update({ name: tempName });
+  }
+
+  // 1. 設定斷線自動清理：當我斷線時，通知對手我也離開了
+  userRef.onDisconnect().remove();
+
+  // 2. 開啟對手的精準監聽
+  const opponentRef = db.ref(`users/${opponentId}`);
+  opponentRef.on("value", (snapshot) => {
     const data = snapshot.val();
+    
     if (data) {
-      // --- 核心修改 1：朝向邏輯重構 ---
-      // 透過比較目前的 x 與上一次的 lastOpponentX 來決定對手臉部朝向
+      // 更新本地快取，確保 draw() 裡的暱稱標籤能抓到最新資料
+      otherPlayers[opponentId] = data;
+
+      // --- 更新對手動態 ---
       if (data.x !== undefined && data.x !== lastOpponentX) {
-        // 因為是鏡像視角，對手 X 變大代表在你的畫面往左走，反之亦然
         opponentFacing = data.x > lastOpponentX ? 1 : -1;
         lastOpponentX = data.x;
       }
 
-      // --- 核心修改 2：將對手的開槍資料 push 進本地共用的 enemyBullets ---
+      // --- 處理同步子彈 ---
       if (data.lastShot && data.lastShot.timestamp > lastProcessedShotTime) {
         lastProcessedShotTime = data.lastShot.timestamp;
-        
-        // 計算對手在我的畫面中的起點 X (使用鏡像反轉)
         const remoteX = RICO_MATH.getCanvasXByRatio(1 - data.lastShot.startXRatio, vanishPoint.y + 0.2 * RICO_MATH.ViewDeep);
         
-        // 將子彈推入 enemyBullets 陣列，套用與 AI 相同的結構
         enemyBullets.push({
           startX: remoteX,
           startY: vanishPoint.y + 0.2 * RICO_MATH.ViewDeep,
@@ -665,25 +672,40 @@ function enterPVPMode() {
         });
       }
 
-      // --- 權威同步：以對手的 Firebase HP 為準 ---
+      // --- 同步 HP ---
       if (data.hp !== undefined) {
         enemyHP = data.hp;
       }
-
-      otherPlayers[opponentId] = data;
+	  
+	  otherPlayers[opponentId] = data;
+	  
     } else {
-      if(!gameOver) { 
-        alert("對手連線中斷"); 
-        location.reload(); 
+      // --- 重要：對手斷線處理 ---
+      if (!gameOver) {
+        gameOver = true;
+        alert("對手已離開遊戲，正在回到大廳...");
+        
+        // 主動清除自己的戰鬥狀態
+        userRef.update({ 
+          opponentId: null, 
+          hp: maxHP, 
+          lastShot: null, 
+          request: null 
+        }).then(() => {
+          location.reload(); 
+        });
       }
     }
   });
 
+  // 3. 進入遊戲畫面
   lobbyUI.style.display = "none";
   initGame(); 
   bgm.play(); 
   gameLoop();
 }
+
+
 
 function stopLobbyListen() {
   // 關閉大廳全體監聽
