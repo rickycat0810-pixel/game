@@ -38,6 +38,26 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
 
+let isCoolingDown = false; // 對戰冷卻狀態
+
+async function checkNickname() {
+    let savedName = localStorage.getItem("playerNickname");
+    
+    // 檢查 Firebase 是否已有資料，若無則要求輸入
+    const snapshot = await userRef.child("name").get();
+    const cloudName = snapshot.val();
+
+    if (!cloudName) {
+        if (!savedName) {
+            savedName = prompt("請輸入你的暱稱 (12字內):", "新玩家");
+            savedName = savedName ? savedName.substring(0, 12) : "匿名玩家";
+        }
+        await userRef.update({ name: savedName });
+        localStorage.setItem("playerNickname", savedName);
+    }
+}
+
+
 let lastOpponentX = 0.5; // 預設中間
 let opponentFacing = 1;  // 預設朝向
 
@@ -289,88 +309,91 @@ function update() {
   if (gameOver || !player) return;
   const game = getCurrentGameState();
 
-  // --- 1. 玩家水平移動 ---
+  // --- 1. 玩家水平移動控制 ---
   let pLeftLimit = getPerspectiveX(player.y, 0) + basePlayerW / 2;
   let pRightLimit = getPerspectiveX(player.y, canvas.width) - basePlayerW / 2;
   let dx = targetX - player.x, mSpeed = canvas.width / 5 / 60;
   if (Math.abs(dx) > mSpeed) dx = mSpeed * Math.sign(dx);
   player.x = Math.max(pLeftLimit, Math.min(player.x + dx, pRightLimit));
 
-  // --- 2. 玩家子彈：更新座標與攻擊判定 ---
+  // --- 2. 玩家子彈更新與判定 ---
   bullets.forEach(b => {
     b.progress = RICO_MATH.getTimeProgress(b.timestamp);
     const d = RICO_MATH.getBulletData(b, false, false);
     b.x = d.x; b.y = d.y;
 
-    // 判定命中敵人：Y 進度 0.75~0.88 之間，且 X 距離足夠近
+    // 擊中判定 (PVP 與 AI 共用邏輯)
     if (!b.hit && b.progress >= 0.75 && b.progress <= 0.92) {
       const xDist = Math.abs(b.x - game.enemy.x);
       if (xDist <= game.enemy.w / 2) {
         enemyHP--;
         b.hit = true;
-        b.progress = 1; // 強制結束
+        b.progress = 1; 
         hitSound.currentTime = 0; hitSound.play();
       }
     }
   });
-  // 回收玩家子彈
   bullets = bullets.filter(b => b.progress < 1.0 && !b.hit);
 
-  // --- 3. 敵人子彈（AI 或 PVP 共用）：更新與判定 ---
-  // 若是 AI 模式，則執行 AI 位移與開火邏輯
+  // --- 3. 敵人/對手子彈更新與判定 ---
   if (!game.enemy.isPVP && enemy) {
-    updateAI(game.enemy.w);
+    updateAI(game.enemy.w); // AI 模式下的移動與發射邏輯
   }
 
-  // 統一處理 enemyBullets 陣列（PVP 的子彈由 enterPVPMode 的監聽器推入此陣列）
   enemyBullets.forEach(eb => {
     eb.progress = RICO_MATH.getTimeProgress(eb.timestamp);
     const d = RICO_MATH.getBulletData(eb, true, game.enemy.isPVP);
     eb.x = d.x; eb.y = d.y;
 
-    // 判定命中玩家：Y 進度 0.75~0.88 之間，且 X 距離靠近玩家
     if (!eb.hit && eb.progress >= 0.75 && eb.progress <= 0.92) {
       const xDist = Math.abs(eb.x - player.x);
       if (xDist <= basePlayerW / 2) {
         eb.hit = true;
-        eb.progress = 1; // 強制結束
+        eb.progress = 1;
         playerHP--;
         hitSound.currentTime = 0; hitSound.play();
-        userRef.update({ hp: playerHP });
+        userRef.update({ hp: playerHP }); // 同步血量給對手看
       }
     }
   });
-  // 統一回收敵人子彈（包含 AI 與 PVP）
   enemyBullets = enemyBullets.filter(eb => eb.progress < 1.2 && !eb.hit);
 
-  // --- 4. 遊戲結束判定 ---
+  // --- 4. 遊戲結束處理 (含冷卻機制) ---
   if ((playerHP <= 0 || enemyHP <= 0) && !gameOver) {
     gameOver = true;
+    isCoolingDown = true; // 啟動冷卻標誌，防止大廳立即點擊
     bgm.pause();
     (playerHP <= 0 ? failSound : winSound).play();
 
-    // 延遲 3.5 秒再回到大廳，確保玩家看清楚勝利字樣與動畫
-    setTimeout(() => {
-      // 先停止所有監聽，防止數據回流觸發 UI
-      stopLobbyListen(); 
+    // 延遲一段時間讓玩家看清結果，再執行重設
+    setTimeout(async () => {
+      stopLobbyListen(); // 先停止對戰數據監聽
       
-      // 清除戰鬥狀態
-      userRef.update({ 
+      // 1. 回歸 Firebase 初始狀態
+      await userRef.update({ 
         opponentId: null, 
         lastShot: null, 
         request: null,
-        hp: maxHP // 重置 HP 供下次使用
+        hp: maxHP 
       });
 
-      // 顯示大廳並重新開始監聽
+      // 2. 切換 UI
       lobbyUI.style.display = "block";
+      lobbyStatus.textContent = "對戰結束，資料歸位中 (冷卻中)...";
+      lobbyStatus.style.color = "yellow";
+
+      // 3. 確保 Firebase 同步完成後的第二次延遲 (冷卻期)
       setTimeout(() => {
-        startLobbyListen();
-      }, 500);
+        isCoolingDown = false;
+        lobbyStatus.textContent = "遊戲大廳";
+        lobbyStatus.style.color = "white";
+        startLobbyListen(); // 重新開啟大廳廣播監聽
+      }, 3000); 
+
     }, 3500); 
   }
   
-  syncToFirebase();
+  syncToFirebase(); // 同步當前位置
 }
 
 function updateAI(enemyW) {
@@ -578,82 +601,70 @@ window.addEventListener("orientationchange", resizeCanvas);
 
 // Firebase 監聽
 function startLobbyListen() {
-  db.ref("users").on("value", snapshot => {
-    otherPlayers = snapshot.val() || {};
-    const me = otherPlayers[playerId];
-    
-    // --- 關鍵補位：處理「發送端」進入對戰 ---
-    // 當對手按下「接受」後，Firebase 會更新我的 opponentId
-    // 此時偵測到變化，發送端必須自動跳轉進入遊戲
-    if (me?.opponentId && !opponentId && gameOver) {
-      opponentId = me.opponentId;
-      console.log("偵測到對手已接受，正在進入遊戲...");
-      
-      // 延遲一小段時間確保數據同步完成
-      setTimeout(() => {
-        stopLobbyListen(); // 停止大廳的所有監聽，防止邏輯重疊
-        enterPVPMode();    // 正式啟動遊戲循環與對手監聽
-      }, 200); 
-      return; // 結束本次 snapshot 處理
-    }
+    db.ref("users").on("value", snapshot => {
+        otherPlayers = snapshot.val() || {};
+        const me = otherPlayers[playerId];
+        
+        // 更新大廳清單
+        playerListDiv.innerHTML = "";
+        Object.keys(otherPlayers).forEach(id => {
+            if (id === playerId) return;
+            const p = otherPlayers[id];
+            const item = document.createElement("div");
+            item.className = "player-item";
+            
+            // 根據狀態顯示不同的標籤
+            let statusText = p.opponentId ? " (對戰中)" : " (在線)";
+            if (isCoolingDown) statusText = " (對戰冷卻中)";
+            
+            item.textContent = (p.name || id) + statusText;
 
-    // 更新大廳清單 UI
-    playerListDiv.innerHTML = "";
-    Object.keys(otherPlayers).forEach(id => {
-      if (id === playerId) return;
-      const p = otherPlayers[id];
-      const item = document.createElement("div");
-      item.className = "player-item"; 
-      
-      const showName = p.name || id;
-      item.textContent = showName + (p.opponentId ? " (對戰中)" : " (在線)");
+            // 只有雙方都不在冷卻且對方沒在對戰時才可點擊
+            if (!p.opponentId && !isCoolingDown) {
+                item.onclick = () => {
+                    db.ref(`users/${id}/request`).set({ 
+                        from: playerId, 
+                        fromName: me.name 
+                    });
+                    alert("邀請已發送！");
+                };
+            }
+            playerListDiv.appendChild(item);
+        });
 
-      // 只有在大廳且不在對戰中的人才可以點擊挑戰
-      if (!p.opponentId) {
-        item.onclick = async () => {
-          let myName = prompt("請輸入你的暱稱 (12字內):", "玩家");
-          if (myName === null) return; // 使用者按取消
-          myName = myName.substring(0, 12) || "匿名玩家";
-          
-          // 1. 確保暱稱先寫入自己的 Firebase 資料中
-          await userRef.update({ name: myName });
-          
-          // 2. 確定自己資料更新後，再發送挑戰請求給對方
-          db.ref(`users/${id}/request`).set({ 
-            from: playerId, 
-            fromName: myName 
-          });
-          alert("邀請已發送，請等待對手接受...");
-        };
-      }
-      playerListDiv.appendChild(item);
+        // 處理接收端：收到挑戰
+        if (me?.request && gameOver && !isCoolingDown) {
+            if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
+                const targetId = me.request.from;
+                // 設定對手關係
+                userRef.update({ request: null, opponentId: targetId });
+                db.ref(`users/${targetId}`).update({ opponentId: playerId });
+                
+                // 這裡不直接 enterPVPMode，改用延遲啟動
+                prepareForBattle(targetId);
+            } else {
+                userRef.update({ request: null });
+            }
+        }
     });
-
-    // --- 處理「接收端」收到挑戰請求 ---
-    if (me?.request && gameOver) {
-      const req = me.request;
-      if (confirm(`來自 ${req.fromName || "對手"} 的挑戰？`)) {
-        opponentId = req.from;
-        
-        // 手動將對手名字存入本地緩存，確保 draw() 第一時間能抓到名字
-        if (!otherPlayers[opponentId]) otherPlayers[opponentId] = {};
-        otherPlayers[opponentId].name = req.fromName;
-
-        // 接受邀請：
-        // 1. 清空請求 2. 設定自己的對手 ID
-        userRef.update({ request: null, opponentId: opponentId });
-        // 3. 回填對手的對手 ID (這會觸發發送端的 if(me?.opponentId) 邏輯)
-        db.ref(`users/${opponentId}`).update({ opponentId: playerId });
-        
-        stopLobbyListen();
-        enterPVPMode();
-      } else { 
-        // 拒絕請求，直接清空
-        userRef.update({ request: null }); 
-      }
-    }
-  });
 }
+
+function prepareForBattle(targetId) {
+    opponentId = targetId;
+    lobbyStatus.textContent = "正在同步暱稱與載入數據...";
+    lobbyStatus.style.color = "#00ff00";
+    
+    // 延遲 2 秒，確保對方的 Name 節點已正確同步到本地 otherPlayers
+    setTimeout(() => {
+        if (otherPlayers[opponentId]) {
+            enterPVPMode();
+        } else {
+            console.log("同步重試中...");
+            prepareForBattle(targetId); // 遞迴重試直到抓到數據
+        }
+    }, 2000); 
+}
+
 
 function enterPVPMode() {
   stopLobbyListen(); // 清理舊監聽
@@ -751,7 +762,10 @@ function stopLobbyListen() {
 
 resizeCanvas(); 
 draw();
-startLobbyListen(); // <-- 插入這行：初始化大廳監聽
+// 先檢查暱稱，確認綁定後再開啟大廳監聽
+checkNickname().then(() => {
+    startLobbyListen();
+});
 
 // 監控玩家動作
 ["mousemove", "mousedown", "touchstart", "keydown"].forEach(evt => {
