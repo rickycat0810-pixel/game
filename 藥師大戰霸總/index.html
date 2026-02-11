@@ -642,8 +642,8 @@ function startLobbyListen() {
         db.ref(`users/${targetId}`).update({ opponentId: playerId });
         prepareForBattle(targetId);
     } else {
-        // 對方拒絕時，清除請求，發送端會因為偵測不到回應而停留在 prepare 狀態或回到大廳
-        userRef.update({ request: null });
+        // 對方拒絕時，清除請求。這會觸發發起者那邊的 checkRef 邏輯回到大廳
+        userRef.update({ request: null, opponentId: null }); 
     }
 }
     });
@@ -651,25 +651,55 @@ function startLobbyListen() {
 
 function prepareForBattle(targetId) {
     opponentId = targetId;
-    // 根據是發起者還是接受者，顯示稍微不同的文字
     lobbyStatus.textContent = "已發送邀請，等待對方接受...";
     lobbyStatus.style.color = "#00ff00";
+
+    // 使用 .on("value") 持續監聽對手的狀態變化，而不是只用 setTimeout 檢查一次
+    const checkRef = db.ref(`users/${targetId}`);
     
-    // 延遲 2 秒，確保資料同步並檢查對方是否已接受 (即對方的 opponentId 是否指向我)
-    setTimeout(() => {
-        if (otherPlayers[opponentId]) {
-            // 如果對方接受了，他的 opponentId 會變成我的 playerId
-            if (otherPlayers[opponentId].opponentId === playerId) {
+    checkRef.on("value", (snapshot) => {
+        const p = snapshot.val();
+        
+        // 1. 如果對手接受了：他的 opponentId 會指向我
+        if (p && p.opponentId === playerId) {
+            checkRef.off("value"); // 停止監聽
+            lobbyStatus.textContent = "對手已接受，準備開戰...";
+            
+            // 給予短暫延遲確保雙方資料快取完成
+            setTimeout(() => {
                 enterPVPMode();
-            } else {
-                // 如果對方還沒接受或拒絕，可以持續等待或設置逾時回到大廳
-                console.log("等待對方接受中...");
-                // 這裡可以加入一個簡單的逾時機制，若一段時間沒反應就回到大廳
+            }, 1000);
+        }
+        
+        // 2. 如果對方拒絕或消失了：對方的 request 變成 null 且 opponentId 不是我
+        // 或者是對方的 request 指向了別人
+        if (!p || (p.request === null && p.opponentId !== playerId)) {
+            // 這裡可以設置一個簡單的檢查，避免一發送就判定為拒絕
+            // 我們檢查是否有「曾經被發送過請求」的狀態，或是簡單判斷 request 是否消失
+            // 為了簡化，我們主要靠對手按下「取消」後清除 request 的行為來判斷
+            if (p && p.request === null && p.opponentId === null) {
+                checkRef.off("value");
+                alert("對方拒絕了你的挑戰或已離開");
+                opponentId = null;
+                lobbyStatus.textContent = "遊戲大廳";
+                lobbyStatus.style.color = "white";
+                startLobbyListen(); // 重啟大廳監聽
             }
         }
-    }, 2000); 
-}
+    });
 
+    // 安全機制：如果 15 秒內沒反應，自動取消等待
+    setTimeout(() => {
+        checkRef.off("value");
+        if (lobbyUI.style.display !== "none" && opponentId === targetId) {
+            alert("邀請逾時，無人回應");
+            opponentId = null;
+            lobbyStatus.textContent = "遊戲大廳";
+            lobbyStatus.style.color = "white";
+            startLobbyListen();
+        }
+    }, 15000);
+}
 
 function enterPVPMode() {
   stopLobbyListen(); // 清理舊監聽
