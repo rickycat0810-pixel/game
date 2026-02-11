@@ -367,15 +367,19 @@ function update() {
 
     // 延遲一段時間讓玩家看清結果，再執行重設
     setTimeout(async () => {
-      stopLobbyListen(); // 先停止對戰數據監聽
-      
-      // 1. 回歸 Firebase 初始狀態
-      await userRef.update({ 
-        opponentId: null, 
-        lastShot: null, 
-        request: null,
-        hp: maxHP 
-      });
+  stopLobbyListen(); 
+  
+  // 取得原本儲存的暱稱
+  const savedName = localStorage.getItem("playerNickname") || "匿名玩家";
+
+  // 1. 回歸 Firebase 初始狀態 (確保包含 name，避免變回 ID)
+  await userRef.update({ 
+    name: savedName,        // <--- 新增這行，確保暱稱被保留
+    opponentId: null, 
+    lastShot: null, 
+    request: null,
+    hp: maxHP 
+  });
 
       // 2. 切換 UI
       lobbyUI.style.display = "block";
