@@ -38,6 +38,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
 
+let battleTimer = null;
 let isCoolingDown = false; // 對戰冷卻狀態
 
 async function checkNickname() {
@@ -658,43 +659,49 @@ function prepareForBattle(targetId) {
     lobbyStatus.textContent = "已發送邀請，等待對方接受...";
     lobbyStatus.style.color = "#00ff00";
 
-    // 使用 .on("value") 持續監聽對手的狀態變化，而不是只用 setTimeout 檢查一次
+    // 如果之前有殘留的定時器，先清除
+    if (battleTimer) clearTimeout(battleTimer);
+
     const checkRef = db.ref(`users/${targetId}`);
     
     checkRef.on("value", (snapshot) => {
         const p = snapshot.val();
         
-        // 1. 如果對手接受了：他的 opponentId 會指向我
         if (p && p.opponentId === playerId) {
-            checkRef.off("value"); // 停止監聽
+            checkRef.off("value");
+            // 【關鍵】：對手接受了，立即清除逾時定時器
+            if (battleTimer) {
+                clearTimeout(battleTimer);
+                battleTimer = null;
+            }
             lobbyStatus.textContent = "對手已接受，準備開戰...";
             
-            // 給予短暫延遲確保雙方資料快取完成
             setTimeout(() => {
                 enterPVPMode();
             }, 1000);
         }
         
-        // 2. 如果對方拒絕或消失了：對方的 request 變成 null 且 opponentId 不是我
-        // 或者是對方的 request 指向了別人
         if (!p || (p.request === null && p.opponentId !== playerId)) {
-            // 這裡可以設置一個簡單的檢查，避免一發送就判定為拒絕
-            // 我們檢查是否有「曾經被發送過請求」的狀態，或是簡單判斷 request 是否消失
-            // 為了簡化，我們主要靠對手按下「取消」後清除 request 的行為來判斷
             if (p && p.request === null && p.opponentId === null) {
                 checkRef.off("value");
+                // 【關鍵】：被拒絕時也清除定時器
+                if (battleTimer) {
+                    clearTimeout(battleTimer);
+                    battleTimer = null;
+                }
                 alert("對方拒絕了你的挑戰或已離開");
                 opponentId = null;
                 lobbyStatus.textContent = "遊戲大廳";
                 lobbyStatus.style.color = "white";
-                startLobbyListen(); // 重啟大廳監聽
+                startLobbyListen();
             }
         }
     });
 
-    // 安全機制：如果 15 秒內沒反應，自動取消等待
-    setTimeout(() => {
+    // 將定時器 ID 存入 battleTimer
+    battleTimer = setTimeout(() => {
         checkRef.off("value");
+        // 檢查是否還停留在大廳且目標還是同一個人
         if (lobbyUI.style.display !== "none" && opponentId === targetId) {
             alert("邀請逾時，無人回應");
             opponentId = null;
@@ -702,10 +709,16 @@ function prepareForBattle(targetId) {
             lobbyStatus.style.color = "white";
             startLobbyListen();
         }
+        battleTimer = null; // 執行完畢後清空
     }, 15000);
 }
 
 function enterPVPMode() {
+  if (battleTimer) {
+      clearTimeout(battleTimer);
+      battleTimer = null;
+    }
+
   stopLobbyListen(); // 清理舊監聽
 
   let lastProcessedShotTime = 0;
