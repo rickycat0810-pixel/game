@@ -641,15 +641,22 @@ function startLobbyListen() {
 
         // 處理接收端：收到挑戰
         if (me?.request && gameOver && !isCoolingDown) {
-    if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
-        const targetId = me.request.from;
-        userRef.update({ request: null, opponentId: targetId });
-        db.ref(`users/${targetId}`).update({ opponentId: playerId });
-        prepareForBattle(targetId);
-    } else {
-        // 對方拒絕時，清除請求。這會觸發發起者那邊的 checkRef 邏輯回到大廳
-        userRef.update({ request: null, opponentId: null }); 
-    }
+		  const requester = otherPlayers[me.request.from];
+		  if (!requester || requester.opponentId) {
+            userRef.update({ request: null });
+            return;
+          }
+		  
+		  
+          if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
+          const targetId = me.request.from;
+          userRef.update({ request: null, opponentId: targetId });
+          db.ref(`users/${targetId}`).update({ opponentId: playerId });
+          prepareForBattle(targetId);
+        } else {
+          // 對方拒絕時，清除請求。這會觸發發起者那邊的 checkRef 邏輯回到大廳
+          userRef.update({ request: null, opponentId: null }); 
+        }
 }
     });
 }
@@ -703,6 +710,7 @@ function prepareForBattle(targetId) {
         checkRef.off("value");
         // 檢查是否還停留在大廳且目標還是同一個人
         if (lobbyUI.style.display !== "none" && opponentId === targetId) {
+		    db.ref(`users/${targetId}/request`).set(null);
             alert("邀請逾時，無人回應");
             opponentId = null;
             lobbyStatus.textContent = "遊戲大廳";
