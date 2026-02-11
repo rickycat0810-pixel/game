@@ -621,46 +621,51 @@ function startLobbyListen() {
 
             // 只有雙方都不在冷卻且對方沒在對戰時才可點擊
             if (!p.opponentId && !isCoolingDown) {
-                item.onclick = () => {
-                    db.ref(`users/${id}/request`).set({ 
-                        from: playerId, 
-                        fromName: me.name 
-                    });
-                    alert("邀請已發送！");
-                };
-            }
+    item.onclick = () => {
+        // 1. 發送邀請到 Firebase
+        db.ref(`users/${id}/request`).set({ 
+            from: playerId, 
+            fromName: me.name 
+        });
+        // 2. 移除 alert，直接進入等待開始狀態
+        prepareForBattle(id); 
+    };
+}
             playerListDiv.appendChild(item);
         });
 
         // 處理接收端：收到挑戰
         if (me?.request && gameOver && !isCoolingDown) {
-            if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
-                const targetId = me.request.from;
-                // 設定對手關係
-                userRef.update({ request: null, opponentId: targetId });
-                db.ref(`users/${targetId}`).update({ opponentId: playerId });
-                
-                // 這裡不直接 enterPVPMode，改用延遲啟動
-                prepareForBattle(targetId);
-            } else {
-                userRef.update({ request: null });
-            }
-        }
+    if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
+        const targetId = me.request.from;
+        userRef.update({ request: null, opponentId: targetId });
+        db.ref(`users/${targetId}`).update({ opponentId: playerId });
+        prepareForBattle(targetId);
+    } else {
+        // 對方拒絕時，清除請求，發送端會因為偵測不到回應而停留在 prepare 狀態或回到大廳
+        userRef.update({ request: null });
+    }
+}
     });
 }
 
 function prepareForBattle(targetId) {
     opponentId = targetId;
-    lobbyStatus.textContent = "正在同步暱稱與載入數據...";
+    // 根據是發起者還是接受者，顯示稍微不同的文字
+    lobbyStatus.textContent = "已發送邀請，等待對方接受...";
     lobbyStatus.style.color = "#00ff00";
     
-    // 延遲 2 秒，確保對方的 Name 節點已正確同步到本地 otherPlayers
+    // 延遲 2 秒，確保資料同步並檢查對方是否已接受 (即對方的 opponentId 是否指向我)
     setTimeout(() => {
         if (otherPlayers[opponentId]) {
-            enterPVPMode();
-        } else {
-            console.log("同步重試中...");
-            prepareForBattle(targetId); // 遞迴重試直到抓到數據
+            // 如果對方接受了，他的 opponentId 會變成我的 playerId
+            if (otherPlayers[opponentId].opponentId === playerId) {
+                enterPVPMode();
+            } else {
+                // 如果對方還沒接受或拒絕，可以持續等待或設置逾時回到大廳
+                console.log("等待對方接受中...");
+                // 這裡可以加入一個簡單的逾時機制，若一段時間沒反應就回到大廳
+            }
         }
     }, 2000); 
 }
