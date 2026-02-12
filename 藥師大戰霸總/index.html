@@ -648,15 +648,19 @@ function startLobbyListen() {
           }
 		  
 		  
-          if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
-          const targetId = me.request.from;
-          userRef.update({ request: null, opponentId: targetId });
-          db.ref(`users/${targetId}`).update({ opponentId: playerId });
-          prepareForBattle(targetId);
-        } else {
-          // 對方拒絕時，清除請求。這會觸發發起者那邊的 checkRef 邏輯回到大廳
-          userRef.update({ request: null, opponentId: null }); 
-        }
+          // ... 前方代碼不變
+if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
+    const targetId = me.request.from;
+    userRef.update({ request: null, opponentId: targetId });
+    db.ref(`users/${targetId}`).update({ opponentId: playerId });
+    prepareForBattle(targetId);
+} else {
+    // 【修改點】：明確告知對方我拒絕了，而不是單純清空
+    const requesterId = me.request.from;
+    userRef.update({ request: null, opponentId: null }); 
+    // 額外通知申請方：將對方的 opponentId 設回 null 並觸發更新
+    db.ref(`users/${requesterId}`).update({ opponentId: null }); 
+}
 }
     });
 }
@@ -671,31 +675,38 @@ function prepareForBattle(targetId) {
     const checkRef = db.ref(`users/${targetId}`);
     
     checkRef.on("value", (snapshot) => {
-        const p = snapshot.val();
+    const p = snapshot.val();
+    
+    // 成功開戰
+    if (p && p.opponentId === playerId) {
+        checkRef.off("value");
+        if (battleTimer) { clearTimeout(battleTimer); battleTimer = null; }
+        lobbyStatus.textContent = "對手已接受，準備開戰...";
+        setTimeout(() => { enterPVPMode(); }, 1000);
+        return;
+    }
+    
+    // 【修復核心】：偵測拒絕
+    // 如果對方資料還在，但對方的 request 已經沒了，且對方的對手不是我
+    if (p && p.request === undefined && p.opponentId !== playerId) {
+        checkRef.off("value");
+        if (battleTimer) { clearTimeout(battleTimer); battleTimer = null; }
         
-        // 1. 成功開戰：對方接受了邀請 (將 opponentId 設為我)
-        if (p && p.opponentId === playerId) {
-            checkRef.off("value");
-            if (battleTimer) { clearTimeout(battleTimer); battleTimer = null; }
-            lobbyStatus.textContent = "對手已接受，準備開戰...";
-            setTimeout(() => { enterPVPMode(); }, 1000);
-            return;
-        }
-        
-        // 2. 被拒絕判定：當對方的 request 變回 null，且對方沒有把我設為對手時
-        // 這代表對方處理了請求（點了取消），或者對方直接離線了
-        if (!p || (p.request === null && p.opponentId !== playerId)) {
-            checkRef.off("value"); // 停止監聽
-            if (battleTimer) { clearTimeout(battleTimer); battleTimer = null; }
-            
-            // 回到大廳狀態
-            alert("對方拒絕了你的挑戰或已離開");
-            opponentId = null;
-            lobbyStatus.textContent = "遊戲大廳";
-            lobbyStatus.style.color = "white";
-            startLobbyListen(); // 重新啟動大廳名單監聽
-        }
-    });
+        alert("對方已取消或拒絕了你的挑戰");
+        opponentId = null;
+        lobbyStatus.textContent = "遊戲大廳";
+        lobbyStatus.style.color = "white";
+        startLobbyListen(); // 強制重刷名單
+    }
+    
+    // 對方斷線
+    if (!p) {
+        checkRef.off("value");
+        if (battleTimer) { clearTimeout(battleTimer); battleTimer = null; }
+        alert("對手已離線");
+        location.reload();
+    }
+});
 
     // 將定時器 ID 存入 battleTimer
     battleTimer = setTimeout(() => {
