@@ -38,6 +38,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
 <script>
 
+let processedRequests = new Set();
 let battleTimer = null;
 let isCoolingDown = false; // 對戰冷卻狀態
 
@@ -626,42 +627,50 @@ function startLobbyListen() {
 
             // 只有雙方都不在冷卻且對方沒在對戰時才可點擊
             if (!p.opponentId && !isCoolingDown) {
-    item.onclick = () => {
-        // 1. 發送邀請到 Firebase
-        db.ref(`users/${id}/request`).set({ 
-            from: playerId, 
-            fromName: me.name 
-        });
-        // 2. 移除 alert，直接進入等待開始狀態
-        prepareForBattle(id); 
-    };
+    // 修改 item.onclick 內的邀請部分
+item.onclick = () => {
+    db.ref(`users/${id}/request`).set({ 
+        from: playerId, 
+        fromName: me.name,
+        timestamp: Date.now() // 新增時間戳，區分不同次的申請
+    });
+    prepareForBattle(id); 
+};
 }
             playerListDiv.appendChild(item);
         });
 
         // 處理接收端：收到挑戰
-        if (me?.request && gameOver && !isCoolingDown) {
-		  const requester = otherPlayers[me.request.from];
-		  if (!requester || requester.opponentId) {
-            userRef.update({ request: null });
-            return;
-          }
-		  
-		  
-          // ... 前方代碼不變
-if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
-    const targetId = me.request.from;
-    userRef.update({ request: null, opponentId: targetId });
-    db.ref(`users/${targetId}`).update({ opponentId: playerId });
-    prepareForBattle(targetId);
-} else {
-    // 【修改點】：明確告知對方我拒絕了，而不是單純清空
-    const requesterId = me.request.from;
-    userRef.update({ request: null, opponentId: null }); 
-    // 額外通知申請方：將對方的 opponentId 設回 null 並觸發更新
-    db.ref(`users/${requesterId}`).update({ opponentId: null }); 
-}
-}
+if (me?.request && gameOver && !isCoolingDown) {
+            const requestId = me.request.from + "_" + (me.request.timestamp || ""); 
+            
+            // 如果這個請求已經被處理過，就跳過
+            if (processedRequests.has(requestId)) return;
+
+            const requester = otherPlayers[me.request.from];
+            if (!requester || requester.opponentId) {
+                userRef.update({ request: null });
+                return;
+            }
+
+            // 標記為已處理
+            processedRequests.add(requestId);
+
+            if (confirm(`來自 ${me.request.fromName} 的挑戰？`)) {
+                const targetId = me.request.from;
+                userRef.update({ request: null, opponentId: targetId });
+                db.ref(`users/${targetId}`).update({ opponentId: playerId });
+                prepareForBattle(targetId);
+            } else {
+                // 拒絕邏輯
+                const requesterId = me.request.from;
+                userRef.update({ request: null, opponentId: null }); 
+                db.ref(`users/${requesterId}`).update({ opponentId: null });
+                
+                // 3秒後從已處理名單移除，允許該玩家未來再次發起挑戰
+                setTimeout(() => { processedRequests.delete(requestId); }, 3000);
+            }
+        }
     });
 }
 
